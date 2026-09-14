@@ -357,12 +357,15 @@ bool runWifiConfigPortal(bool notifyChange = false,
 }
 
 String getDefaultMdnsName() {
-  String mac = WiFi.macAddress();
-  mac.replace(":", "");
-  if (mac.length() >= 4) {
-    return "smarthome" + mac.substring(mac.length() - 4);
-  }
-  return "smarthome";
+  // Read the MAC directly from hardware eFuse before WiFi even starts
+  uint64_t chipId = ESP.getEfuseMac();
+  char buf[13];
+  snprintf(buf, sizeof(buf), "%02X%02X%02X%02X%02X%02X", (uint8_t)(chipId),
+           (uint8_t)(chipId >> 8), (uint8_t)(chipId >> 16),
+           (uint8_t)(chipId >> 24), (uint8_t)(chipId >> 32),
+           (uint8_t)(chipId >> 40));
+  String mac = String(buf);
+  return "smarthome" + mac.substring(mac.length() - 4);
 }
 
 String getDefaultDeviceName() {
