@@ -1,0 +1,1677 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ESP Smart Home</title>
+    <link rel="icon" type="image/svg+xml" href="/index.svg" />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      html,
+      body {
+        width: 100%;
+        overflow-x: hidden;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+      }
+
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #121212;
+        min-height: 100vh;
+        color: #e0e0e0;
+      }
+
+      body.app-init .login-overlay,
+      body.app-init #dashboard {
+        visibility: hidden;
+      }
+
+      /* ── Login Screen ── */
+      .login-overlay {
+        position: fixed;
+        inset: 0;
+        background: #121212;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+
+      .login-overlay.hidden {
+        display: none;
+      }
+
+      .login-box {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 24px;
+        padding: 40px 32px;
+        width: 100%;
+        max-width: 380px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      }
+
+      .login-box h2 {
+        text-align: center;
+        color: #e2e8f0;
+        font-size: 1.3rem;
+        font-weight: 700;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+      }
+
+      .login-box .login-sub {
+        text-align: center;
+        color: #64748b;
+        font-size: 0.82rem;
+        margin-bottom: 28px;
+      }
+
+      .login-field {
+        margin-bottom: 18px;
+      }
+
+      .login-field label {
+        display: block;
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: #94a3b8;
+        margin-bottom: 6px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+      }
+
+      .login-field input {
+        width: 100%;
+        padding: 12px 16px;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.06);
+        color: #e2e8f0;
+        font-size: 0.95rem;
+        outline: none;
+        transition: border-color 0.2s;
+      }
+
+      .login-field input:focus {
+        border-color: #2563eb;
+      }
+
+      .login-field input::placeholder {
+        color: #475569;
+      }
+
+      .remember-field {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 18px;
+      }
+
+      .remember-option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .remember-option input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        accent-color: #2563eb;
+        cursor: pointer;
+      }
+
+      .remember-option label {
+        font-size: 0.82rem;
+        color: #94a3b8;
+        cursor: pointer;
+      }
+
+      .login-btn {
+        width: 100%;
+        padding: 14px;
+        border-radius: 14px;
+        border: none;
+        background: #2563eb;
+        color: #fff;
+        font-size: 0.95rem;
+        font-weight: 700;
+        letter-spacing: 1px;
+        cursor: pointer;
+        margin-top: 8px;
+        box-shadow: 0 4px 14px rgba(37, 99, 235, 0.3);
+        transition: background 0.2s;
+      }
+
+      .login-btn:active {
+        background: #1d4ed8;
+      }
+
+      .login-error {
+        text-align: center;
+        color: #f87171;
+        font-size: 0.82rem;
+        margin-top: 14px;
+        min-height: 20px;
+      }
+
+      .login-lock {
+        text-align: center;
+        margin-bottom: 20px;
+      }
+
+      .login-lock svg {
+        width: 48px;
+        height: 48px;
+        stroke: #2563eb;
+        fill: none;
+        stroke-width: 1.5;
+      }
+
+      /* ── Main Page ── */
+      .page {
+        width: 100%;
+        max-width: 520px;
+        margin: 0 auto;
+        padding: 24px 16px 20px;
+        box-sizing: border-box;
+      }
+
+      .page.hidden {
+        display: none;
+      }
+
+      /* ── Header ── */
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        padding: 24px 0 8px;
+      }
+
+      .brand {
+        min-width: 0;
+        flex-shrink: 1;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        font-size: 1.15rem;
+        font-weight: 600;
+        color: #94a3b8;
+        letter-spacing: 4px;
+        text-transform: uppercase;
+      }
+
+      .header-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+
+      .online-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #22c55e;
+        box-shadow: 0 0 6px rgba(34, 197, 94, 0.6);
+        flex-shrink: 0;
+      }
+
+      .settings-btn {
+        width: 42px;
+        height: 42px;
+        border-radius: 12px;
+        border: none;
+        background: rgba(255, 255, 255, 0.06);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      .settings-btn svg {
+        width: 22px;
+        height: 22px;
+        fill: none;
+        stroke: #94a3b8;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      /* ── DateTime ── */
+      .datetime {
+        text-align: center;
+        padding: 10px 0 24px;
+        color: #64748b;
+        font-size: 0.82rem;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* ── Cards ── */
+      .cards {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 16px;
+        width: 100%;
+        max-width: 100%;
+        margin: 0 auto;
+      }
+
+      .card {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 20px;
+        padding: 22px 20px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        min-width: 0;
+        max-width: 100%;
+        box-shadow:
+          0 2px 6px rgba(0, 0, 0, 0.25),
+          inset 0 0.5px 0 rgba(255, 255, 255, 0.08);
+      }
+
+      .card-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+      }
+
+      .card-icon {
+        width: 44px;
+        height: 44px;
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.06);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+      }
+
+      .card-icon svg {
+        width: 22px;
+        height: 22px;
+        fill: none;
+        stroke: #64748b;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .card.on .card-icon {
+        background: rgba(59, 130, 246, 0.15);
+      }
+
+      .card.on .card-icon svg {
+        stroke: #60a5fa;
+      }
+
+      .card-name {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #e2e8f0;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
+      .card-status {
+        font-size: 0.78rem;
+        color: #64748b;
+        margin-top: 2px;
+        font-weight: 500;
+        letter-spacing: 0.3px;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
+      .card.on .card-status {
+        color: #60a5fa;
+      }
+
+      /* ── Card Feature Icons ── */
+      .card-features {
+        display: flex;
+        gap: 12px;
+        padding-top: 4px;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        max-width: 100%;
+      }
+
+      .feat-icon {
+        width: 28px;
+        height: 28px;
+        min-width: 0;
+        flex-shrink: 1;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid transparent;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      .feat-icon svg {
+        width: 14px;
+        height: 14px;
+        fill: none;
+        stroke: #475569;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .feat-icon:active svg {
+        stroke: #60a5fa;
+      }
+
+      .feat-icon.active {
+        background: rgba(59, 130, 246, 0.18);
+        border-color: rgba(96, 165, 250, 0.35);
+        box-shadow: 0 0 8px rgba(96, 165, 250, 0.2);
+      }
+
+      .feat-icon.active svg {
+        stroke: #93c5fd;
+      }
+
+      /* ── Toggle Switch (3D pill) ── */
+      .toggle {
+        position: relative;
+        width: 48px;
+        height: 28px;
+        flex-shrink: 0;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      .toggle input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+        position: absolute;
+      }
+
+      .toggle-track {
+        position: absolute;
+        inset: 0;
+        border-radius: 14px;
+        background: #2a2a2e;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        box-shadow:
+          inset 0 2px 4px rgba(0, 0, 0, 0.5),
+          0 0.5px 0 rgba(255, 255, 255, 0.05);
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      .toggle-track::after {
+        content: "";
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 22px;
+        height: 22px;
+        border-radius: 11px;
+        background: #555;
+        box-shadow:
+          0 1px 4px rgba(0, 0, 0, 0.4),
+          inset 0 1px 0 rgba(255, 255, 255, 0.15);
+        transition:
+          transform 0.25s ease,
+          background 0.25s ease;
+      }
+
+      input:checked + .toggle-track {
+        background: #2563eb;
+        border-color: rgba(96, 165, 250, 0.3);
+        box-shadow:
+          inset 0 2px 4px rgba(0, 0, 0, 0.3),
+          0 0 8px rgba(37, 99, 235, 0.2);
+      }
+
+      input:checked + .toggle-track::after {
+        transform: translateX(20px);
+        background: #fff;
+        box-shadow:
+          0 1px 4px rgba(0, 0, 0, 0.3),
+          inset 0 1px 0 rgba(255, 255, 255, 0.6);
+      }
+
+      /* ── Divider ── */
+      .divider {
+        height: 1px;
+        background: rgba(255, 255, 255, 0.06);
+        margin: 28px 0;
+      }
+
+      /* ── Action Buttons ── */
+      .actions {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 14px;
+      }
+
+      .action-btn {
+        padding: 16px;
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        font-size: 0.88rem;
+        font-weight: 700;
+        letter-spacing: 1px;
+        cursor: pointer;
+        text-align: center;
+        box-shadow:
+          0 2px 6px rgba(0, 0, 0, 0.25),
+          inset 0 0.5px 0 rgba(255, 255, 255, 0.08);
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      .btn-on {
+        background: rgba(34, 197, 94, 0.12);
+        border-color: rgba(34, 197, 94, 0.25);
+        color: #4ade80;
+      }
+
+      .btn-off {
+        background: rgba(239, 68, 68, 0.12);
+        border-color: rgba(239, 68, 68, 0.25);
+        color: #f87171;
+      }
+
+      /* ── Confirmation Modal ── */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 500;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+
+      .modal-overlay.hidden {
+        display: none;
+      }
+
+      .modal-box {
+        background: #1e1e22;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 20px;
+        padding: 28px 24px 22px;
+        width: 100%;
+        max-width: 320px;
+        text-align: center;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+      }
+
+      .modal-box p {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #e2e8f0;
+        margin-bottom: 22px;
+      }
+
+      .modal-actions {
+        display: flex;
+        gap: 12px;
+      }
+
+      .modal-actions button {
+        flex: 1;
+        padding: 12px;
+        border-radius: 12px;
+        border: none;
+        font-size: 0.88rem;
+        font-weight: 700;
+        cursor: pointer;
+        letter-spacing: 0.5px;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      .modal-cancel {
+        background: rgba(255, 255, 255, 0.08);
+        color: #94a3b8;
+      }
+
+      .modal-confirm {
+        background: #2563eb;
+        color: #fff;
+        box-shadow: 0 2px 10px rgba(37, 99, 235, 0.3);
+      }
+
+      /* ── Footer ── */
+      .footer {
+        text-align: center;
+        padding: 28px 16px 18px;
+        color: #3f3f46;
+        font-size: 0.72rem;
+        font-weight: 500;
+        letter-spacing: 0.3px;
+        line-height: 1.6;
+      }
+
+      .footer span {
+        color: #475569;
+      }
+
+      /* ── Remove tap highlight on mobile ── */
+      button,
+      label,
+      .toggle,
+      .toggle-track,
+      .feat-icon,
+      .action-btn {
+        -webkit-tap-highlight-color: transparent;
+        outline: none;
+      }
+
+      button:focus,
+      label:focus,
+      input:focus {
+        outline: none;
+      }
+
+      /* ── Responsive ── */
+      @media (max-width: 400px) {
+        .page {
+          padding: 16px 12px 16px;
+        }
+
+        .brand {
+          font-size: 1rem;
+          letter-spacing: 3px;
+        }
+
+        .cards {
+          gap: 10px;
+        }
+
+        .card {
+          padding: 16px 12px 12px;
+          border-radius: 16px;
+          gap: 10px;
+        }
+
+        .card-features {
+          gap: 6px;
+        }
+
+        .feat-icon {
+          width: 24px;
+          height: 24px;
+        }
+
+        .feat-icon svg {
+          width: 12px;
+          height: 12px;
+        }
+
+        .card-icon {
+          width: 38px;
+          height: 38px;
+          border-radius: 12px;
+        }
+
+        .card-icon svg {
+          width: 20px;
+          height: 20px;
+        }
+
+        .card-name {
+          font-size: 0.88rem;
+        }
+
+        .action-btn {
+          padding: 14px;
+          font-size: 0.82rem;
+          border-radius: 14px;
+        }
+
+        .login-box {
+          padding: 32px 24px;
+        }
+      }
+    </style>
+  </head>
+  <body class="app-init">
+    <!-- ── Login Screen ── -->
+    <div class="login-overlay" id="loginScreen">
+      <div class="login-box">
+        <div class="login-lock">
+          <svg viewBox="0 0 24 24">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+            <circle cx="12" cy="16" r="1" />
+          </svg>
+        </div>
+        <h2>Smart Home</h2>
+        <div class="login-sub">Enter credentials to continue</div>
+        <div class="login-field">
+          <label>User ID</label>
+          <input
+            type="text"
+            id="loginUser"
+            name="username"
+            placeholder="Enter user ID"
+            autocomplete="username"
+          />
+        </div>
+        <div class="login-field">
+          <label>Password</label>
+          <input
+            type="password"
+            id="loginPass"
+            name="password"
+            placeholder="Enter password"
+            autocomplete="current-password"
+          />
+        </div>
+        <div class="remember-field">
+          <div class="remember-option">
+            <input type="checkbox" id="rememberMe" />
+            <label for="rememberMe">Remember me</label>
+          </div>
+          <div class="remember-option">
+            <input type="checkbox" id="resetAdmin" />
+            <label for="resetAdmin">Reset admin</label>
+          </div>
+        </div>
+        <button class="login-btn" id="loginBtn">SIGN IN</button>
+        <div class="login-error" id="loginError"></div>
+      </div>
+    </div>
+
+    <!-- ── Confirmation Modal ── -->
+    <div class="modal-overlay hidden" id="confirmModal">
+      <div class="modal-box">
+        <p id="confirmMsg">Are you sure?</p>
+        <div class="modal-actions">
+          <button class="modal-cancel" id="modalCancel">Cancel</button>
+          <button class="modal-confirm" id="modalConfirm">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Dashboard ── -->
+    <div class="page hidden" id="dashboard">
+      <div class="header">
+        <div class="brand">ESP Smart Home</div>
+        <div class="header-right">
+          <div class="online-dot" title="Device Online"></div>
+          <button class="settings-btn" title="Settings" id="settingsBtn">
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+              />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          </button>
+          <button class="settings-btn" title="Logout" id="logoutBtn">
+            <svg viewBox="0 0 24 24">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="datetime" id="datetime"></div>
+
+      <div class="cards">
+        <!-- Card 0: Living Room -->
+        <div class="card" data-index="0">
+          <div class="card-top">
+            <div class="card-icon">
+              <svg viewBox="0 0 24 24">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                <polyline points="9 22 9 12 15 12 15 22" />
+              </svg>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" />
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+          <div>
+            <div class="card-name">Living Room</div>
+            <div class="card-status">Off</div>
+          </div>
+          <div class="card-features">
+            <div class="feat-icon" data-feature="timer" title="Timer">
+              <svg viewBox="0 0 24 24">
+                <circle cx="12" cy="13" r="8" />
+                <path d="M12 9v4l2 2" />
+                <path d="M5 3L2 6" />
+                <path d="M22 6l-3-3" />
+              </svg>
+            </div>
+            <div class="feat-icon" data-feature="schedule" title="Schedule">
+              <svg viewBox="0 0 24 24">
+                <rect x="3" y="4" width="18" height="18" rx="2" />
+                <path d="M16 2v4" />
+                <path d="M8 2v4" />
+                <path d="M3 10h18" />
+              </svg>
+            </div>
+            <div
+              class="feat-icon"
+              data-feature="future"
+              title="Future Schedule"
+            >
+              <svg viewBox="0 0 24 24">
+                <path d="M12 8v4l3 3" />
+                <circle cx="12" cy="12" r="10" />
+                <path d="M17 17l2 2" />
+              </svg>
+            </div>
+            <div
+              class="feat-icon"
+              data-feature="sensor"
+              title="Sensor Automation"
+            >
+              <svg viewBox="0 0 24 24">
+                <circle cx="6" cy="12" r="2" />
+                <circle cx="18" cy="6" r="2" />
+                <circle cx="18" cy="18" r="2" />
+                <path d="M8 12h4" />
+                <path d="M12 12l4-6" />
+                <path d="M12 12l4 6" />
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 1: Bedroom -->
+        <div class="card" data-index="1">
+          <div class="card-top">
+            <div class="card-icon">
+              <svg viewBox="0 0 24 24">
+                <path d="M2 4v16h20V4H2zm2 2h16v9H4V6z" />
+                <path d="M9 20h6" stroke-width="1.8" fill="none" />
+              </svg>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" />
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+          <div>
+            <div class="card-name">Bedroom</div>
+            <div class="card-status">Off</div>
+          </div>
+          <div class="card-features">
+            <div class="feat-icon" data-feature="timer" title="Timer">
+              <svg viewBox="0 0 24 24">
+                <circle cx="12" cy="13" r="8" />
+                <path d="M12 9v4l2 2" />
+                <path d="M5 3L2 6" />
+                <path d="M22 6l-3-3" />
+              </svg>
+            </div>
+            <div class="feat-icon" data-feature="schedule" title="Schedule">
+              <svg viewBox="0 0 24 24">
+                <rect x="3" y="4" width="18" height="18" rx="2" />
+                <path d="M16 2v4" />
+                <path d="M8 2v4" />
+                <path d="M3 10h18" />
+              </svg>
+            </div>
+            <div
+              class="feat-icon"
+              data-feature="future"
+              title="Future Schedule"
+            >
+              <svg viewBox="0 0 24 24">
+                <path d="M12 8v4l3 3" />
+                <circle cx="12" cy="12" r="10" />
+                <path d="M17 17l2 2" />
+              </svg>
+            </div>
+            <div
+              class="feat-icon"
+              data-feature="sensor"
+              title="Sensor Automation"
+            >
+              <svg viewBox="0 0 24 24">
+                <circle cx="6" cy="12" r="2" />
+                <circle cx="18" cy="6" r="2" />
+                <circle cx="18" cy="18" r="2" />
+                <path d="M8 12h4" />
+                <path d="M12 12l4-6" />
+                <path d="M12 12l4 6" />
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 2: Kitchen -->
+        <div class="card" data-index="2">
+          <div class="card-top">
+            <div class="card-icon">
+              <svg viewBox="0 0 24 24">
+                <path d="M18 8h1a4 4 0 0 1 0 8h-1" />
+                <path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z" />
+                <line x1="6" y1="1" x2="6" y2="4" />
+                <line x1="10" y1="1" x2="10" y2="4" />
+                <line x1="14" y1="1" x2="14" y2="4" />
+              </svg>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" />
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+          <div>
+            <div class="card-name">Kitchen</div>
+            <div class="card-status">Off</div>
+          </div>
+          <div class="card-features">
+            <div class="feat-icon" data-feature="timer" title="Timer">
+              <svg viewBox="0 0 24 24">
+                <circle cx="12" cy="13" r="8" />
+                <path d="M12 9v4l2 2" />
+                <path d="M5 3L2 6" />
+                <path d="M22 6l-3-3" />
+              </svg>
+            </div>
+            <div class="feat-icon" data-feature="schedule" title="Schedule">
+              <svg viewBox="0 0 24 24">
+                <rect x="3" y="4" width="18" height="18" rx="2" />
+                <path d="M16 2v4" />
+                <path d="M8 2v4" />
+                <path d="M3 10h18" />
+              </svg>
+            </div>
+            <div
+              class="feat-icon"
+              data-feature="future"
+              title="Future Schedule"
+            >
+              <svg viewBox="0 0 24 24">
+                <path d="M12 8v4l3 3" />
+                <circle cx="12" cy="12" r="10" />
+                <path d="M17 17l2 2" />
+              </svg>
+            </div>
+            <div
+              class="feat-icon"
+              data-feature="sensor"
+              title="Sensor Automation"
+            >
+              <svg viewBox="0 0 24 24">
+                <circle cx="6" cy="12" r="2" />
+                <circle cx="18" cy="6" r="2" />
+                <circle cx="18" cy="18" r="2" />
+                <path d="M8 12h4" />
+                <path d="M12 12l4-6" />
+                <path d="M12 12l4 6" />
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 3: Bathroom -->
+        <div class="card" data-index="3">
+          <div class="card-top">
+            <div class="card-icon">
+              <svg viewBox="0 0 24 24">
+                <path
+                  d="M9 6l.463-.536a5 5 0 0 1 7.071 7.072L12 17l-4.534-4.464A5 5 0 0 1 9 6z"
+                  fill="none"
+                />
+                <path d="M12 17v5" />
+                <path d="M8 22h8" />
+              </svg>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" />
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+          <div>
+            <div class="card-name">Bathroom</div>
+            <div class="card-status">Off</div>
+          </div>
+          <div class="card-features">
+            <div class="feat-icon" data-feature="timer" title="Timer">
+              <svg viewBox="0 0 24 24">
+                <circle cx="12" cy="13" r="8" />
+                <path d="M12 9v4l2 2" />
+                <path d="M5 3L2 6" />
+                <path d="M22 6l-3-3" />
+              </svg>
+            </div>
+            <div class="feat-icon" data-feature="schedule" title="Schedule">
+              <svg viewBox="0 0 24 24">
+                <rect x="3" y="4" width="18" height="18" rx="2" />
+                <path d="M16 2v4" />
+                <path d="M8 2v4" />
+                <path d="M3 10h18" />
+              </svg>
+            </div>
+            <div
+              class="feat-icon"
+              data-feature="future"
+              title="Future Schedule"
+            >
+              <svg viewBox="0 0 24 24">
+                <path d="M12 8v4l3 3" />
+                <circle cx="12" cy="12" r="10" />
+                <path d="M17 17l2 2" />
+              </svg>
+            </div>
+            <div
+              class="feat-icon"
+              data-feature="sensor"
+              title="Sensor Automation"
+            >
+              <svg viewBox="0 0 24 24">
+                <circle cx="6" cy="12" r="2" />
+                <circle cx="18" cy="6" r="2" />
+                <circle cx="18" cy="18" r="2" />
+                <path d="M8 12h4" />
+                <path d="M12 12l4-6" />
+                <path d="M12 12l4 6" />
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="actions">
+        <button class="action-btn btn-on" id="allOnBtn">ALL ON</button>
+        <button class="action-btn btn-off" id="allOffBtn">ALL OFF</button>
+      </div>
+
+      <div class="footer">
+        ESP32 Smart Home Dashboard<br />
+        <span>Developer &copy; M.Maity</span>
+      </div>
+    </div>
+
+    <script>
+      /* ── Session Management ── */
+      var SESSION_KEY = "smartHomeSession";
+      var REMEMBER_KEY = "smartHomeRemember";
+      var ROLE_KEY = "smartHomeRole";
+
+      function isLoggedIn() {
+        return sessionStorage.getItem(SESSION_KEY) === "true";
+      }
+
+      var USER_KEY = "smartHomeUser";
+
+      function setLoggedIn(remember, role, user) {
+        sessionStorage.setItem(SESSION_KEY, "true");
+        sessionStorage.setItem(ROLE_KEY, role || "user");
+        if (user) sessionStorage.setItem(USER_KEY, user);
+        if (remember) {
+          localStorage.setItem(REMEMBER_KEY, "true");
+        }
+      }
+
+      function checkRemembered() {
+        return localStorage.getItem(REMEMBER_KEY) === "true";
+      }
+
+      function logout() {
+        sessionStorage.removeItem(SESSION_KEY);
+        sessionStorage.removeItem(ROLE_KEY);
+        sessionStorage.removeItem(USER_KEY);
+        localStorage.removeItem(REMEMBER_KEY);
+        window.location.reload();
+      }
+
+      /* ── DOM Elements ── */
+      var loginScreen = document.getElementById("loginScreen");
+      var dashboard = document.getElementById("dashboard");
+      var loginBtn = document.getElementById("loginBtn");
+      var loginError = document.getElementById("loginError");
+      var loginUserInput = document.getElementById("loginUser");
+      var loginPassInput = document.getElementById("loginPass");
+      var rememberMeCheckbox = document.getElementById("rememberMe");
+      var resetAdminCheckbox = document.getElementById("resetAdmin");
+      var RESET_ADMIN_REQUEST_DELAY_MS = 5200;
+
+      /* ── Toggle Cards ── */
+      var cards = document.querySelectorAll(".card");
+      var toggles = document.querySelectorAll(".toggle input");
+
+      /* ── Confirmation Modal ── */
+      var modal = document.getElementById("confirmModal");
+      var confirmMsg = document.getElementById("confirmMsg");
+      var modalConfirm = document.getElementById("modalConfirm");
+      var modalCancel = document.getElementById("modalCancel");
+      var pendingAction = null;
+
+      function showConfirm(msg, action) {
+        confirmMsg.textContent = msg;
+        pendingAction = action;
+        modal.classList.remove("hidden");
+      }
+
+      modalCancel.addEventListener("click", function () {
+        modal.classList.add("hidden");
+        pendingAction = null;
+      });
+
+      modalConfirm.addEventListener("click", function () {
+        modal.classList.add("hidden");
+        if (pendingAction) pendingAction();
+        pendingAction = null;
+      });
+
+      /* ── Clock ── */
+      var months = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+      ];
+
+      var deviceTimezoneOffsetMinutes = null;
+      var deviceTimezoneLabel = "";
+
+      function parseTimezoneOffsetMinutes(tzText) {
+        var cleaned = String(tzText || "").trim();
+        var match = cleaned.match(/^([+-])(\d{2}):(\d{2})$/);
+        if (!match) {
+          return null;
+        }
+
+        var sign = match[1] === "-" ? -1 : 1;
+        var hh = parseInt(match[2], 10);
+        var mm = parseInt(match[3], 10);
+        if (!isFinite(hh) || !isFinite(mm) || hh > 14 || mm > 59) {
+          return null;
+        }
+
+        return sign * (hh * 60 + mm);
+      }
+
+      function getDeviceTimezoneDate() {
+        var now = new Date();
+        if (
+          deviceTimezoneOffsetMinutes === null ||
+          !isFinite(deviceTimezoneOffsetMinutes)
+        ) {
+          return now;
+        }
+
+        var utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+        return new Date(utcMs + deviceTimezoneOffsetMinutes * 60000);
+      }
+
+      function loadDeviceTimezone() {
+        return fetch("/api/admin/time", { cache: "no-store" })
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (d) {
+            var tzValue = d && d.tz ? String(d.tz).trim() : "";
+            var parsedOffset = parseTimezoneOffsetMinutes(tzValue);
+            if (parsedOffset !== null) {
+              deviceTimezoneOffsetMinutes = parsedOffset;
+              deviceTimezoneLabel = tzValue;
+            }
+            updateClock();
+          })
+          .catch(function () {});
+      }
+
+      function updateClock() {
+        var now = getDeviceTimezoneDate();
+        var h = String(now.getHours()).padStart(2, "0");
+        var m = String(now.getMinutes()).padStart(2, "0");
+        var s = String(now.getSeconds()).padStart(2, "0");
+        var d = now.getDate();
+        var mon = months[now.getMonth()];
+        var y = now.getFullYear();
+        document.getElementById("datetime").textContent =
+          h +
+          ":" +
+          m +
+          ":" +
+          s +
+          "  " +
+          d +
+          " " +
+          mon +
+          " " +
+          y +
+          (deviceTimezoneLabel ? "  " + deviceTimezoneLabel : "");
+      }
+
+      function normalizeIconName(iconName) {
+        var aliases = {
+          monitor: "tv",
+          cup: "kitchen",
+          droplet: "bathroom",
+        };
+        return aliases[iconName] || iconName || "home";
+      }
+
+      var iconSvgMap = {
+        bulb: '<svg viewBox="0 0 24 24"><path d="M9 21h6" /><path d="M12 3a6 6 0 0 0-6 6c0 2.22 1.21 4.16 3 5.19V17a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-2.81c1.79-1.03 3-2.97 3-5.19a6 6 0 0 0-6-6z" /></svg>',
+        fan: '<svg viewBox="0 0 24 24"><path d="M12 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0" /><path d="M12 2c3.5 0 3.5 6 0 9" /><path d="M12 22c-3.5 0 -3.5 -6 0 -9" /><path d="M2 12c0 -3.5 6 -3.5 9 0" /><path d="M22 12c0 3.5 -6 3.5 -9 0" /></svg>',
+        tv: '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="15" rx="2" /><polyline points="17 2 12 7 7 2" /></svg>',
+        ac: '<svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="8" rx="2" /><path d="M6 12v2" /><path d="M10 12v4" /><path d="M14 12v6" /><path d="M18 12v4" /></svg>',
+        plug: '<svg viewBox="0 0 24 24"><path d="M12 22v-6" /><path d="M9 8V2" /><path d="M15 8V2" /><rect x="6" y="8" width="12" height="8" rx="2" /></svg>',
+        speaker:
+          '<svg viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2" /><circle cx="12" cy="14" r="4" /><line x1="12" y1="6" x2="12" y2="6.01" /></svg>',
+        washer:
+          '<svg viewBox="0 0 24 24"><rect x="3" y="2" width="18" height="20" rx="2" /><circle cx="12" cy="13" r="5" /><line x1="7" y1="6" x2="7" y2="6.01" /><line x1="10" y1="6" x2="10" y2="6.01" /></svg>',
+        fridge:
+          '<svg viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2" /><line x1="4" y1="10" x2="20" y2="10" /><line x1="17" y1="6" x2="17" y2="6.01" /><line x1="17" y1="14" x2="17" y2="17" /></svg>',
+        lamp: '<svg viewBox="0 0 24 24"><path d="M9 18h6" /><path d="M10 22h4" /><path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14" /></svg>',
+        heater:
+          '<svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="1" /><path d="M8 6v4" /><path d="M12 6v4" /><path d="M16 6v4" /><path d="M8 3c0 1.5 1.5 2 1.5 3" /><path d="M12 3c0 1.5 1.5 2 1.5 3" /><path d="M16 3c0 1.5 1.5 2 1.5 3" /></svg>',
+        home: '<svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></svg>',
+        bedroom:
+          '<svg viewBox="0 0 24 24"><path d="M2 4v16h20V4H2zm2 2h16v9H4V6z" /><path d="M9 20h6" stroke-width="1.8" fill="none" /></svg>',
+        kitchen:
+          '<svg viewBox="0 0 24 24"><path d="M18 8h1a4 4 0 0 1 0 8h-1" /><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z" /><line x1="6" y1="1" x2="6" y2="4" /><line x1="10" y1="1" x2="10" y2="4" /><line x1="14" y1="1" x2="14" y2="4" /></svg>',
+        bathroom:
+          '<svg viewBox="0 0 24 24"><path d="M9 6l.463-.536a5 5 0 0 1 7.071 7.072L12 17l-4.534-4.464A5 5 0 0 1 9 6z" fill="none" /><path d="M12 17v5" /><path d="M8 22h8" /></svg>',
+        garage:
+          '<svg viewBox="0 0 24 24"><path d="M4 20V9a2 2 0 0 1 .7-1.52l6.3-5.4a2 2 0 0 1 2 0l6.3 5.4A2 2 0 0 1 20 9v11" /><path d="M4 20h16" /><path d="M9 14h6" /><path d="M9 17h6" /></svg>',
+        garden:
+          '<svg viewBox="0 0 24 24"><path d="M12 10a6 6 0 0 0-6 6c0 3.31 2.69 6 6 6" /><path d="M12 10a6 6 0 0 1 6 6c0 3.31-2.69 6-6 6" /><path d="M12 2v8" /><path d="M8 5l4-3 4 3" /></svg>',
+        office:
+          '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2" /><path d="M6 10h.01" /><path d="M10 10h.01" /><path d="M14 10h.01" /><path d="M18 10h.01" /><path d="M8 14h8" /></svg>',
+        door: '<svg viewBox="0 0 24 24"><path d="M5 2h11a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" /><circle cx="14" cy="12" r="1" /></svg>',
+        stairs:
+          '<svg viewBox="0 0 24 24"><path d="M22 5v3h-5v3h-5v3H7v3H2v3" /></svg>',
+        balcony:
+          '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="10" rx="1" /><path d="M3 13h18" /><path d="M6 13v8" /><path d="M12 13v8" /><path d="M18 13v8" /></svg>',
+      };
+
+      function getSwitchIconSvg(iconName) {
+        return iconSvgMap[normalizeIconName(iconName)] || iconSvgMap.home;
+      }
+
+      /* ── Load Switch Data from ESP32 ── */
+      function loadSwitches() {
+        fetch("/api/switches")
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (data) {
+            cards.forEach(function (card, i) {
+              var iconEl = card.querySelector(".card-icon");
+              var nameEl = card.querySelector(".card-name");
+              var statusEl = card.querySelector(".card-status");
+              var toggle = card.querySelector(".toggle input");
+              if (data.names && data.names[i])
+                nameEl.textContent = data.names[i];
+              if (iconEl && data.icons && data.icons[i]) {
+                iconEl.innerHTML = getSwitchIconSvg(data.icons[i]);
+              }
+              if (data.states && data.states[i]) {
+                toggle.checked = true;
+                card.classList.add("on");
+                statusEl.textContent = "On";
+              } else {
+                toggle.checked = false;
+                card.classList.remove("on");
+                statusEl.textContent = "Off";
+              }
+            });
+          })
+          .catch(function (err) {
+            console.log("Switch load error:", err);
+          });
+      }
+
+      function hasSavedSensorAutomation(record) {
+        if (!record || typeof record !== "object" || Array.isArray(record)) {
+          return false;
+        }
+        return [
+          "condition",
+          "action",
+          "value",
+          "min",
+          "max",
+          "offset",
+          "offsetMinutes",
+          "enabled",
+        ].some(function (key) {
+          return (
+            record[key] !== undefined &&
+            record[key] !== null &&
+            record[key] !== ""
+          );
+        });
+      }
+
+      function setFeatureIconState(cardIndex, featureKey, active) {
+        var card = cards[cardIndex];
+        if (!card) return;
+        var icon = card.querySelector(
+          '.feat-icon[data-feature="' + featureKey + '"]',
+        );
+        if (!icon) return;
+        icon.classList.toggle("active", !!active);
+      }
+
+      var automationIndicatorsBusy = false;
+
+      function loadAutomationFeatureIndicators() {
+        if (automationIndicatorsBusy) {
+          return Promise.resolve();
+        }
+        automationIndicatorsBusy = true;
+
+        var sensorTypes = ["temp", "humid", "sun"];
+        var timersBySwitch = [];
+        var schedulesBySwitch = [];
+        var futureBySwitch = [];
+        var sensorEntries = [];
+        var jobs = [];
+
+        for (var sw = 0; sw < cards.length; sw++) {
+          (function (switchIndex) {
+            jobs.push(function () {
+              return fetch("/api/timers?sw=" + switchIndex, {
+                cache: "no-store",
+              })
+                .then(function (r) {
+                  return r.ok ? r.json() : [];
+                })
+                .catch(function () {
+                  return [];
+                })
+                .then(function (data) {
+                  timersBySwitch[switchIndex] = data;
+                });
+            });
+
+            jobs.push(function () {
+              return fetch("/api/schedules?sw=" + switchIndex, {
+                cache: "no-store",
+              })
+                .then(function (r) {
+                  return r.ok ? r.json() : [];
+                })
+                .catch(function () {
+                  return [];
+                })
+                .then(function (data) {
+                  schedulesBySwitch[switchIndex] = data;
+                });
+            });
+
+            jobs.push(function () {
+              return fetch("/api/fschedules?sw=" + switchIndex, {
+                cache: "no-store",
+              })
+                .then(function (r) {
+                  return r.ok ? r.json() : [];
+                })
+                .catch(function () {
+                  return [];
+                })
+                .then(function (data) {
+                  futureBySwitch[switchIndex] = data;
+                });
+            });
+
+            sensorTypes.forEach(function (sensorType) {
+              jobs.push(function () {
+                return fetch(
+                  "/api/sensor/" + sensorType + "?sw=" + switchIndex,
+                  { cache: "no-store" },
+                )
+                  .then(function (r) {
+                    return r.ok ? r.json() : {};
+                  })
+                  .catch(function () {
+                    return {};
+                  })
+                  .then(function (data) {
+                    sensorEntries.push({ sw: switchIndex, data: data || {} });
+                  });
+              });
+            });
+          })(sw);
+        }
+
+        /* Run one request at a time to avoid overwhelming the ESP32's
+           web server with many concurrent connections. */
+        return jobs
+          .reduce(function (chain, job) {
+            return chain.then(job);
+          }, Promise.resolve())
+          .then(function () {
+            var sensorActiveBySwitch = [];
+
+            for (var i = 0; i < cards.length; i++) {
+              sensorActiveBySwitch.push(false);
+            }
+
+            sensorEntries.forEach(function (entry) {
+              var switchIndex = parseInt(entry.sw, 10);
+              if (
+                switchIndex >= 0 &&
+                switchIndex < cards.length &&
+                hasSavedSensorAutomation(entry.data)
+              ) {
+                sensorActiveBySwitch[switchIndex] = true;
+              }
+            });
+
+            for (var swIndex = 0; swIndex < cards.length; swIndex++) {
+              setFeatureIconState(
+                swIndex,
+                "timer",
+                Array.isArray(timersBySwitch[swIndex]) &&
+                  timersBySwitch[swIndex].length > 0,
+              );
+              setFeatureIconState(
+                swIndex,
+                "schedule",
+                Array.isArray(schedulesBySwitch[swIndex]) &&
+                  schedulesBySwitch[swIndex].length > 0,
+              );
+              setFeatureIconState(
+                swIndex,
+                "future",
+                Array.isArray(futureBySwitch[swIndex]) &&
+                  futureBySwitch[swIndex].length > 0,
+              );
+              setFeatureIconState(
+                swIndex,
+                "sensor",
+                !!sensorActiveBySwitch[swIndex],
+              );
+            }
+          })
+          .catch(function (err) {
+            console.log("Automation indicator load error:", err);
+          })
+          .then(function () {
+            automationIndicatorsBusy = false;
+          });
+      }
+
+      /* ── Toggle Switch via API ── */
+      toggles.forEach(function (t) {
+        t.addEventListener("change", function () {
+          var card = this.closest(".card");
+          var idx = card.getAttribute("data-index");
+          var status = card.querySelector(".card-status");
+          var checked = this.checked;
+          if (checked) {
+            card.classList.add("on");
+            status.textContent = "On";
+          } else {
+            card.classList.remove("on");
+            status.textContent = "Off";
+          }
+          fetch("/api/switch/toggle", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "index=" + idx + "&state=" + checked,
+          }).catch(function (err) {
+            console.log("Toggle error:", err);
+          });
+        });
+      });
+
+      /* ── ALL ON / ALL OFF (Staggered to protect ESP32 memory) ── */
+      document
+        .getElementById("allOnBtn")
+        .addEventListener("click", function () {
+          showConfirm("Turn ON all switches?", function () {
+            var delayMs = 0;
+            toggles.forEach(function (t) {
+              setTimeout(function () {
+                t.checked = true;
+                t.dispatchEvent(new Event("change"));
+              }, delayMs);
+              delayMs += 150; // Adds a 150ms gap between each request
+            });
+          });
+        });
+
+      document
+        .getElementById("allOffBtn")
+        .addEventListener("click", function () {
+          showConfirm("Turn OFF all switches?", function () {
+            var delayMs = 0;
+            toggles.forEach(function (t) {
+              setTimeout(function () {
+                t.checked = false;
+                t.dispatchEvent(new Event("change"));
+              }, delayMs);
+              delayMs += 150; // Adds a 150ms gap between each request
+            });
+          });
+        });
+
+      /* ── Settings Redirect ── */
+      document
+        .getElementById("settingsBtn")
+        .addEventListener("click", function () {
+          window.location.href = "config.html";
+        });
+
+      /* ── Feature Icon Redirect to Automation Section ── */
+      var featureNavigation = {
+        timer: { tab: "automation", panel: "panel-auto-timer" },
+        schedule: { tab: "automation", panel: "panel-auto-schedule" },
+        future: { tab: "automation", panel: "panel-auto-future" },
+        sensor: { tab: "automation", panel: "panel-auto-sensor" },
+      };
+
+      document.querySelectorAll(".feat-icon").forEach(function (icon) {
+        icon.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var card = this.closest(".card");
+          var idx = card ? card.getAttribute("data-index") : "0";
+          var target = featureNavigation[this.getAttribute("data-feature")];
+          if (!target) return;
+          window.location.href =
+            "config.html?tab=" +
+            encodeURIComponent(target.tab) +
+            "&panel=" +
+            encodeURIComponent(target.panel) +
+            "&sw=" +
+            encodeURIComponent(idx);
+        });
+      });
+
+      /* ── Logout Button ── */
+      document
+        .getElementById("logoutBtn")
+        .addEventListener("click", function () {
+          showConfirm("Are you sure you want to logout?", function () {
+            logout();
+          });
+        });
+
+      /* ── Login via API ── */
+      function submitLoginRequest(u, p, resetAdminRequested) {
+        fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body:
+            "user=" +
+            encodeURIComponent(u) +
+            "&pass=" +
+            encodeURIComponent(p) +
+            "&resetAdmin=" +
+            (resetAdminRequested ? "true" : "false"),
+        })
+          .then(function (r) {
+            return r.json().then(function (d) {
+              return { ok: r.ok, data: d };
+            });
+          })
+          .then(function (res) {
+            loginBtn.disabled = false;
+            loginBtn.textContent = "SIGN IN";
+
+            if (res.data && res.data.resetAdmin) {
+              if (res.ok) {
+                loginError.style.color = "#86efac";
+                loginError.textContent =
+                  res.data.msg ||
+                  "Admin reset to default (esp / 456456). Sign in now.";
+                loginUserInput.value = "esp";
+                loginPassInput.value = "456456";
+                if (resetAdminCheckbox) resetAdminCheckbox.checked = false;
+              } else {
+                loginError.style.color = "#f87171";
+                loginError.textContent =
+                  res.data.error ||
+                  "Hold BOOT for 5 seconds first, then press SIGN IN.";
+                loginPassInput.value = "";
+              }
+              return;
+            }
+
+            if (res.ok && res.data.ok) {
+              setLoggedIn(rememberMeCheckbox.checked, res.data.role, u);
+              loginScreen.classList.add("hidden");
+              dashboard.classList.remove("hidden");
+              loginError.textContent = "";
+              loadDeviceTimezone();
+              updateClock();
+              loadSwitches();
+              loadAutomationFeatureIndicators();
+            } else {
+              loginError.textContent = res.data.error || "Invalid credentials";
+              loginPassInput.value = "";
+            }
+          })
+          .catch(function () {
+            loginBtn.disabled = false;
+            loginBtn.textContent = "SIGN IN";
+            loginError.textContent = "Connection failed";
+          });
+      }
+
+      function doLogin() {
+        var u = loginUserInput.value.trim();
+        var p = loginPassInput.value;
+        var resetAdminRequested = !!(
+          resetAdminCheckbox && resetAdminCheckbox.checked
+        );
+
+        loginError.style.color = "#f87171";
+
+        if (!resetAdminRequested && (!u || !p)) {
+          loginError.textContent = "Please enter credentials";
+          return;
+        }
+
+        loginBtn.disabled = true;
+
+        if (resetAdminRequested) {
+          loginBtn.textContent = "HOLD BOOT...";
+          loginError.textContent = "Press and hold BOOT now for 5 seconds...";
+          setTimeout(function () {
+            loginBtn.textContent = "SIGNING IN...";
+            submitLoginRequest(u, p, true);
+          }, RESET_ADMIN_REQUEST_DELAY_MS);
+          return;
+        }
+
+        loginBtn.textContent = "SIGNING IN...";
+        submitLoginRequest(u, p, false);
+      }
+
+      loginBtn.addEventListener("click", doLogin);
+      loginPassInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") doLogin();
+      });
+      loginUserInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") doLogin();
+      });
+
+      /* ── Auto-login if session exists or remembered (Staggered Load) ── */
+      function initSession() {
+        if (isLoggedIn() || checkRemembered()) {
+          if (checkRemembered()) {
+            sessionStorage.setItem(SESSION_KEY, "true");
+          }
+          loginScreen.classList.add("hidden");
+          dashboard.classList.remove("hidden");
+
+          // Staggering the initial loads prevents memory spikes
+          setTimeout(function () {
+            loadDeviceTimezone();
+            updateClock();
+          }, 50);
+
+          setTimeout(function () {
+            loadSwitches();
+          }, 250);
+
+          setTimeout(function () {
+            loadAutomationFeatureIndicators();
+          }, 500);
+        }
+        document.body.classList.remove("app-init");
+      }
+
+      /* ── Periodic switch state refresh ── */
+      setInterval(function () {
+        if (
+          !document.getElementById("dashboard").classList.contains("hidden")
+        ) {
+          loadSwitches();
+        }
+      }, 5000);
+
+      setInterval(function () {
+        if (
+          !document.getElementById("dashboard").classList.contains("hidden")
+        ) {
+          loadAutomationFeatureIndicators();
+        }
+      }, 7000); // Increased from 5000 to 7000 to separate API traffic
+
+      /* ── Initialize ── */
+      initSession();
+      setInterval(updateClock, 1000);
+    </script>
+  </body>
+</html>
