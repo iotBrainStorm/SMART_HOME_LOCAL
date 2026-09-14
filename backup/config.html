@@ -2796,6 +2796,53 @@
           </div>
         </div>
 
+        <!-- mDNS Setup -->
+        <div class="panel" id="panel-admin-mdns">
+          <div class="panel-title">mDNS Setup</div>
+          <div class="info-box">
+            Configure the local network address (mDNS) to access your ESP32
+            without an IP address. For example, if you set "livingroom", you can
+            access it at <strong>http://livingroom.local</strong>.
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Default mDNS Name</div>
+              <div class="setting-sub" id="defaultMdnsName">Loading...</div>
+            </div>
+          </div>
+          <div
+            class="setting-row"
+            style="flex-direction: column; align-items: flex-start; gap: 10px"
+          >
+            <div class="setting-label">Custom mDNS Name</div>
+            <div
+              style="display: flex; align-items: center; gap: 8px; width: 100%"
+            >
+              <span style="color: #64748b">http://</span>
+              <input
+                class="cfg-input"
+                type="text"
+                id="adminMdnsName"
+                placeholder="smarthomeXXXX"
+                maxlength="32"
+                style="max-width: 200px"
+              />
+              <span style="color: #64748b">.local</span>
+            </div>
+            <div class="setting-sub">
+              Only letters, numbers, and hyphens are allowed.
+            </div>
+          </div>
+          <div style="margin-top: 16px; text-align: right">
+            <button
+              class="cfg-btn cfg-btn-primary"
+              onclick="saveMdnsSettings()"
+            >
+              Save mDNS
+            </button>
+          </div>
+        </div>
+
         <!-- Schedule Priority -->
         <div class="panel" id="panel-admin-schedule-priority">
           <div class="panel-title with-action">
@@ -3681,6 +3728,7 @@
         ],
         admin: [
           { label: "Device Name", panel: "panel-admin-device-name" },
+          { label: "mDNS Setup", panel: "panel-admin-mdns" },
           {
             label: "Schedule Priority",
             panel: "panel-admin-schedule-priority",
@@ -6208,6 +6256,73 @@
         );
       }
 
+      function loadMdnsSettings() {
+        apiGet("/api/admin/mdns")
+          .then(function (d) {
+            var defaultEl = document.getElementById("defaultMdnsName");
+            if (defaultEl) {
+              defaultEl.textContent =
+                d && d.defaultMdns
+                  ? "http://" + d.defaultMdns + ".local"
+                  : "Unavailable";
+            }
+            var input = document.getElementById("adminMdnsName");
+            if (input) {
+              input.value = d && d.mdns ? d.mdns : d.defaultMdns || "";
+            }
+          })
+          .catch(function () {});
+      }
+
+      function saveMdnsSettings() {
+        var input = document.getElementById("adminMdnsName");
+        var newMdns = input ? input.value.trim() : "";
+        if (!newMdns) {
+          alert("Please enter mDNS name");
+          return;
+        }
+        if (newMdns.length > 32) {
+          alert("mDNS name must be 32 characters or less");
+          return;
+        }
+        if (/[^a-zA-Z0-9-]/.test(newMdns)) {
+          alert(
+            "mDNS name can only contain letters, numbers, and hyphens (no spaces).",
+          );
+          return;
+        }
+
+        showPasswordModal(
+          "Enter admin credentials to save mDNS name",
+          function (data, adminUser, adminPass) {
+            apiPost(
+              "/api/admin/mdns",
+              appendAdminCredentials(
+                "mdns=" + encodeURIComponent(newMdns),
+                adminUser,
+                adminPass,
+              ),
+            )
+              .then(function (d) {
+                if (d.ok) {
+                  if (input) input.value = d.mdns || newMdns;
+                  alert(
+                    "mDNS name saved successfully!\n\nYou can now access the device at http://" +
+                      (d.mdns || newMdns) +
+                      ".local",
+                  );
+                  loadMdnsSettings();
+                } else {
+                  alert(d.error || "Failed to save mDNS name");
+                }
+              })
+              .catch(function () {
+                alert("Connection error");
+              });
+          },
+        );
+      }
+
       function loadSchedulePrioritySettings() {
         ensurePrioritySelectOptions();
         setPriorityOrderInUi(DEFAULT_AUTOMATION_PRIORITY_ORDER);
@@ -7844,6 +7959,12 @@
         setTimeout(
           function () {
             loadDeviceNameSettings();
+          },
+          (loadDelay += delayStep),
+        );
+        setTimeout(
+          function () {
+            loadMdnsSettings();
           },
           (loadDelay += delayStep),
         );

@@ -1163,18 +1163,7 @@
         var mon = months[now.getMonth()];
         var y = now.getFullYear();
         document.getElementById("datetime").textContent =
-          h +
-          ":" +
-          m +
-          ":" +
-          s +
-          "  " +
-          d +
-          " " +
-          mon +
-          " " +
-          y +
-          (deviceTimezoneLabel ? "  " + deviceTimezoneLabel : "");
+          d + " " + mon + " " + y + " | " + h + ":" + m + ":" + s;
       }
 
       function normalizeIconName(iconName) {

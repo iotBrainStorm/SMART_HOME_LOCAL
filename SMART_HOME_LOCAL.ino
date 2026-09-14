@@ -10,6 +10,7 @@
 #include <Dusk2Dawn.h>
 #include <EEPROM.h>
 #include <ESPAsyncWebServer.h>
+#include <ESPmDNS.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -103,6 +104,7 @@ String tzStr = DEFAULT_TIME_ZONE;
 long gmtOff = 0;
 float geoLat = DEFAULT_LATITUDE, geoLon = DEFAULT_LONGITUDE;
 String deviceName = "";
+String mdnsName = "";
 bool timeSynced = false;
 bool ahtOk = false;
 bool locOk = true;
@@ -354,6 +356,15 @@ bool runWifiConfigPortal(bool notifyChange = false,
   return false;
 }
 
+String getDefaultMdnsName() {
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  if (mac.length() >= 4) {
+    return "smarthome" + mac.substring(mac.length() - 4);
+  }
+  return "smarthome";
+}
+
 String getDefaultDeviceName() {
   uint64_t chipId = ESP.getEfuseMac();
   char buf[13];
@@ -510,6 +521,7 @@ void loadAdminSettings() {
   geoLat = prefs.getFloat("lat", DEFAULT_LATITUDE);
   geoLon = prefs.getFloat("lon", DEFAULT_LONGITUDE);
   storedDeviceName = prefs.getString("devname", "");
+  String storedMdns = prefs.getString("mdns", "");
   storedPrimaryAdminId = prefs.getString("puid", String(PRIMARY_ADMIN_ID));
   storedPrimaryAdminPass = prefs.getString("ppass", String(PRIMARY_ADMIN_PASS));
   loadedRestartScheduleLastRunKey = prefs.getString("rsLast", "");
@@ -525,6 +537,12 @@ void loadAdminSettings() {
   String defaultDeviceName = getDefaultDeviceName();
   String legacyReversedDefaultDeviceName = getLegacyReversedDefaultDeviceName();
   bool migrateLegacyReversedDeviceName = false;
+  storedMdns.trim();
+  if (storedMdns.isEmpty()) {
+    mdnsName = getDefaultMdnsName();
+  } else {
+    mdnsName = storedMdns;
+  }
   if (storedDeviceName.isEmpty()) {
     deviceName = defaultDeviceName;
   } else {
@@ -565,6 +583,9 @@ void loadAdminSettings() {
     prefs.begin("admin", false);
     if (storedDeviceName.isEmpty() || migrateLegacyReversedDeviceName) {
       prefs.putString("devname", deviceName);
+    }
+    if (storedMdns.isEmpty()) {
+      prefs.putString("mdns", mdnsName);
     }
     if (!orderValid) {
       for (int i = 0; i < AUTOMATION_SOURCE_COUNT; i++) {
@@ -826,10 +847,16 @@ void resetRelayStatesToDefault() {
 
 void resetDeviceNameToDefault() {
   deviceName = getDefaultDeviceName();
+  mdnsName = getDefaultMdnsName();
   prefs.begin("admin", false);
   prefs.putString("devname", deviceName);
+  prefs.putString("mdns", mdnsName);
   prefs.end();
   WiFi.setHostname(deviceName.c_str());
+
+  MDNS.end();
+  MDNS.begin(mdnsName.c_str());
+  MDNS.addService("http", "tcp", 80);
 }
 
 void resetNtpServerToDefault() {
@@ -2704,6 +2731,53 @@ void setupWebServer() {
       req->send(response);
     });
 
+    server.on("/api/admin/mdns", HTTP_GET, [](AsyncWebServerRequest *req) {
+      JsonDocument d;
+      d["mdns"] = mdnsName;
+      d["defaultMdns"] = getDefaultMdnsName();
+      AsyncResponseStream *response = req->beginResponseStream("application/json");
+      serializeJson(d, *response);
+      req->send(response);
+    });
+
+    server.on("/api/admin/mdns", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!req->hasParam("mdns", true)) {
+        req->send(400, "application/json", "{\"error\":\"Missing mDNS name\"}");
+        return;
+      }
+      if (!requireAdminVerification(req))
+        return;
+
+      String newMdns = req->getParam("mdns", true)->value();
+      newMdns.trim();
+      if (newMdns.isEmpty()) {
+        req->send(400, "application/json", "{\"error\":\"mDNS name is required\"}");
+        return;
+      }
+      if (newMdns.length() > 32) {
+        req->send(400, "application/json", "{\"error\":\"mDNS name too long\"}");
+        return;
+      }
+
+      mdnsName = newMdns;
+      prefs.begin("admin", false);
+      prefs.putString("mdns", mdnsName);
+      prefs.end();
+      notifyStorage();
+
+      // Restart mDNS service locally
+      MDNS.end();
+      MDNS.begin(mdnsName.c_str());
+      MDNS.addService("http", "tcp", 80);
+
+      JsonDocument d;
+      d["ok"] = true;
+      d["mdns"] = mdnsName;
+      AsyncResponseStream *response = req->beginResponseStream("application/json");
+      serializeJson(d, *response);
+      req->send(response);
+    });
+
     server.on("/api/admin/schedule-priority", HTTP_GET, [](AsyncWebServerRequest *req) {
       JsonDocument d;
       JsonArray arr = d["order"].to<JsonArray>();
@@ -3178,6 +3252,10 @@ void setup() {
     WiFi.setSleep(false);
     syncTime();
     setupWebServer();
+    if (MDNS.begin(mdnsName.c_str())) {
+      MDNS.addService("http", "tcp", 80);
+      Serial.println("[MDNS] Started: http://" + mdnsName + ".local");
+    }
   }
 
   calcSunriseSunset();
