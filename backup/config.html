@@ -3250,6 +3250,10 @@
               <span class="status-value mono" id="perfCpuFreq">Loading...</span>
             </div>
             <div class="status-row">
+              <span class="status-key">CPU Core Temp</span>
+              <span class="status-value mono" id="perfCpuTemp">Loading...</span>
+            </div>
+            <div class="status-row">
               <span class="status-key">System Uptime</span>
               <span
                 class="status-value mono"
@@ -3932,6 +3936,9 @@
           .then(function (d) {
             document.getElementById("perfCpuFreq").textContent =
               d.cpuFreq + " MHz";
+            document.getElementById("perfCpuTemp").textContent = d.cpuTemp
+              ? d.cpuTemp.toFixed(1) + " °C"
+              : "-- °C";
             document.getElementById("perfUptime").textContent = formatUptime(
               d.uptime,
             );
