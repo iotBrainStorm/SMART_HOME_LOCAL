@@ -607,48 +607,39 @@
         stroke-linejoin: round;
       }
 
-      /* ── Signal Bars ── */
-      .signal-bars {
-        display: inline-flex;
-        align-items: flex-end;
-        gap: 3px;
-        height: 16px;
-        margin-left: 10px;
+      /* ── WiFi Icon Signal ── */
+      .wifi-icon {
+        width: 22px;
+        height: 22px;
+        margin-left: 8px;
       }
-      .signal-bar {
-        width: 4px;
-        background: rgba(255, 255, 255, 0.15);
-        border-radius: 1px;
-        transition: background 0.3s ease;
-      }
-      .signal-bar:nth-child(1) {
-        height: 6px;
-      }
-      .signal-bar:nth-child(2) {
-        height: 9px;
-      }
-      .signal-bar:nth-child(3) {
-        height: 12px;
-      }
-      .signal-bar:nth-child(4) {
-        height: 16px;
+      .wifi-icon path {
+        stroke: rgba(255, 255, 255, 0.15);
+        transition: stroke 0.3s ease;
       }
 
-      .signal-weak .signal-bar:nth-child(1) {
-        background: #ef4444;
-      } /* Red */
-      .signal-fair .signal-bar:nth-child(1),
-      .signal-fair .signal-bar:nth-child(2) {
-        background: #eab308;
-      } /* Yellow */
-      .signal-good .signal-bar:nth-child(1),
-      .signal-good .signal-bar:nth-child(2),
-      .signal-good .signal-bar:nth-child(3) {
-        background: #22c55e;
-      } /* Green */
-      .signal-excel .signal-bar {
-        background: #22c55e;
-      } /* All Green */
+      /* Weak: Red Dot */
+      .wifi-icon.signal-weak .wifi-dot {
+        stroke: #ef4444;
+      }
+
+      /* Fair: Yellow Dot + Inner Arc */
+      .wifi-icon.signal-fair .wifi-dot,
+      .wifi-icon.signal-fair .wifi-arc1 {
+        stroke: #eab308;
+      }
+
+      /* Good: Green Dot + 2 Arcs */
+      .wifi-icon.signal-good .wifi-dot,
+      .wifi-icon.signal-good .wifi-arc1,
+      .wifi-icon.signal-good .wifi-arc2 {
+        stroke: #22c55e;
+      }
+
+      /* Excellent: All Green */
+      .wifi-icon.signal-excel path {
+        stroke: #22c55e;
+      }
 
       /* ── Info Box ── */
       .info-box {
@@ -2468,12 +2459,34 @@
                 <span class="status-value mono" id="wifiStatusSignalText"
                   >Unavailable</span
                 >
-                <div class="signal-bars" id="wifiSignalBars">
-                  <div class="signal-bar"></div>
-                  <div class="signal-bar"></div>
-                  <div class="signal-bar"></div>
-                  <div class="signal-bar"></div>
-                </div>
+                <svg
+                  id="wifiSignalIcon"
+                  class="wifi-icon"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path
+                    class="wifi-arc3"
+                    d="M2.3 9A14.9 14.9 0 0 1 21.7 9"
+                  ></path>
+                  <path
+                    class="wifi-arc2"
+                    d="M5.6 12.8A10.4 10.4 0 0 1 18.4 12.8"
+                  ></path>
+                  <path
+                    class="wifi-arc1"
+                    d="M9 16.5A5.6 5.6 0 0 1 15 16.5"
+                  ></path>
+                  <path
+                    class="wifi-dot"
+                    d="M12 20h.01"
+                    stroke-width="3.5"
+                  ></path>
+                </svg>
               </span>
             </div>
             <div class="status-row">
@@ -7200,10 +7213,10 @@
 
       function updateWifiSignalUI(connected, rssi) {
         var textEl = document.getElementById("wifiStatusSignalText");
-        var barsEl = document.getElementById("wifiSignalBars");
-        if (!textEl || !barsEl) return;
+        var iconEl = document.getElementById("wifiSignalIcon"); // Updated ID
+        if (!textEl || !iconEl) return;
 
-        barsEl.className = "signal-bars"; // Reset all colors
+        iconEl.className = "wifi-icon"; // Reset all colors
 
         if (!connected) {
           textEl.textContent = "Unavailable";
@@ -7217,21 +7230,21 @@
         }
 
         var quality = "Weak";
-        var barClass = "signal-weak"; // 1 bar (Red)
+        var barClass = "signal-weak";
 
         if (signalValue >= -55) {
-          quality = "Excellent";
-          barClass = "signal-excel"; // 4 bars (Green)
+          quality = "Superb";
+          barClass = "signal-excel";
         } else if (signalValue >= -67) {
           quality = "Good";
-          barClass = "signal-good"; // 3 bars (Green)
+          barClass = "signal-good";
         } else if (signalValue >= -75) {
           quality = "Fair";
-          barClass = "signal-fair"; // 2 bars (Yellow)
+          barClass = "signal-fair";
         }
 
         textEl.textContent = signalValue + " dBm (" + quality + ")";
-        barsEl.classList.add(barClass);
+        iconEl.classList.add(barClass);
       }
 
       function startWifiStatusMonitor() {
