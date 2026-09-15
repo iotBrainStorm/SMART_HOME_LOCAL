@@ -3236,6 +3236,103 @@
           <div id="locationStatus" style="margin-top: 12px"></div>
         </div>
 
+        <!-- Performance -->
+        <div class="panel" id="panel-admin-performance">
+          <div class="panel-title">System Performance</div>
+          <div class="info-box">
+            Real-time metrics for ESP32 CPU, Memory, and SPIFFS Storage.
+          </div>
+
+          <div class="wifi-status-list">
+            <!-- CPU & Uptime -->
+            <div class="status-row">
+              <span class="status-key">CPU Frequency</span>
+              <span class="status-value mono" id="perfCpuFreq">Loading...</span>
+            </div>
+            <div class="status-row">
+              <span class="status-key">System Uptime</span>
+              <span
+                class="status-value mono"
+                id="perfUptime"
+                style="color: #60a5fa"
+                >Loading...</span
+              >
+            </div>
+
+            <!-- RAM Details -->
+            <div
+              class="setting-row"
+              style="
+                flex-direction: column;
+                align-items: stretch;
+                gap: 12px;
+                margin-bottom: 0;
+              "
+            >
+              <div style="display: flex; justify-content: space-between">
+                <span class="status-key">Memory (RAM) Usage</span>
+                <span class="status-value mono" id="perfRamUsage">--%</span>
+              </div>
+              <div class="restart-progress-track">
+                <div
+                  id="perfRamBar"
+                  class="restart-progress-bar"
+                  style="width: 0%"
+                ></div>
+              </div>
+              <div
+                style="
+                  display: flex;
+                  justify-content: space-between;
+                  font-size: 0.75rem;
+                  color: #64748b;
+                "
+              >
+                <span id="perfFreeRam">Free: -- KB</span>
+                <span id="perfMinRam">Min: -- KB</span>
+                <span id="perfMaxBlock">Largest: -- KB</span>
+              </div>
+            </div>
+
+            <!-- SPIFFS Details -->
+            <div
+              class="setting-row"
+              style="
+                flex-direction: column;
+                align-items: stretch;
+                gap: 12px;
+                margin-bottom: 0;
+              "
+            >
+              <div style="display: flex; justify-content: space-between">
+                <span class="status-key">Storage (SPIFFS) Usage</span>
+                <span class="status-value mono" id="perfSpiffsUsage">--%</span>
+              </div>
+              <div class="restart-progress-track">
+                <div
+                  id="perfSpiffsBar"
+                  class="restart-progress-bar"
+                  style="
+                    width: 0%;
+                    background: linear-gradient(90deg, #10b981, #34d399);
+                  "
+                ></div>
+              </div>
+              <div
+                style="
+                  display: flex;
+                  justify-content: space-between;
+                  font-size: 0.75rem;
+                  color: #64748b;
+                "
+              >
+                <span id="perfSpiffsUsed">Used: -- KB</span>
+                <span id="perfSpiffsTotal">Total: -- KB</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Restart -->
         <div class="panel" id="panel-admin-restart">
           <div class="panel-title">Restart Device</div>
@@ -3813,6 +3910,82 @@
         });
       }
 
+      /* ── Performance Monitor ── */
+      var performanceInterval = null;
+
+      function formatUptime(seconds) {
+        if (!seconds || isNaN(seconds)) return "--";
+        var d = Math.floor(seconds / 86400);
+        var h = Math.floor((seconds % 86400) / 3600);
+        var m = Math.floor((seconds % 3600) / 60);
+        var s = seconds % 60;
+        var parts = [];
+        if (d > 0) parts.push(d + "d");
+        if (h > 0 || d > 0) parts.push(h + "h");
+        if (m > 0 || h > 0 || d > 0) parts.push(m + "m");
+        parts.push(s + "s");
+        return parts.join(" ");
+      }
+
+      function loadPerformanceStats() {
+        apiGet("/api/admin/performance")
+          .then(function (d) {
+            document.getElementById("perfCpuFreq").textContent =
+              d.cpuFreq + " MHz";
+            document.getElementById("perfUptime").textContent = formatUptime(
+              d.uptime,
+            );
+
+            document.getElementById("perfFreeRam").textContent =
+              "Free: " + (d.freeHeap / 1024).toFixed(1) + " KB";
+            document.getElementById("perfMinRam").textContent =
+              "Min: " + (d.minHeap / 1024).toFixed(1) + " KB";
+            document.getElementById("perfMaxBlock").textContent =
+              "Largest: " + (d.maxBlock / 1024).toFixed(1) + " KB";
+
+            var ramUsagePct = 0;
+            if (d.heapSize > 0) {
+              ramUsagePct = ((d.heapSize - d.freeHeap) / d.heapSize) * 100;
+            }
+            document.getElementById("perfRamUsage").textContent =
+              ramUsagePct.toFixed(1) + "%";
+            document.getElementById("perfRamBar").style.width =
+              ramUsagePct + "%";
+
+            document.getElementById("perfSpiffsUsed").textContent =
+              "Used: " + (d.spiffsUsed / 1024).toFixed(1) + " KB";
+            document.getElementById("perfSpiffsTotal").textContent =
+              "Total: " + (d.spiffsTotal / 1024).toFixed(1) + " KB";
+
+            var spiffsUsagePct = 0;
+            if (d.spiffsTotal > 0) {
+              spiffsUsagePct = (d.spiffsUsed / d.spiffsTotal) * 100;
+            }
+            document.getElementById("perfSpiffsUsage").textContent =
+              spiffsUsagePct.toFixed(1) + "%";
+            document.getElementById("perfSpiffsBar").style.width =
+              spiffsUsagePct + "%";
+          })
+          .catch(function (err) {
+            document.getElementById("perfCpuFreq").textContent = "Disconnected";
+            document.getElementById("perfUptime").textContent = "--";
+          });
+      }
+
+      function startPerformanceMonitor() {
+        loadPerformanceStats(); // fetch instantly
+        if (!performanceInterval) {
+          performanceInterval = setInterval(loadPerformanceStats, 2000);
+        }
+      }
+
+      function stopPerformanceMonitor() {
+        if (performanceInterval) {
+          clearInterval(performanceInterval);
+          performanceInterval = null;
+        }
+      }
+
       /* ── Data: tabs → sidebar items → panel IDs ── */
       var tabConfig = {
         switches: [
@@ -3855,6 +4028,7 @@
           },
           { label: "Time Setup", panel: "panel-admin-time" },
           { label: "Location Setup", panel: "panel-admin-location" },
+          { label: "Performance", panel: "panel-admin-performance" },
           { label: "Restart", panel: "panel-admin-restart" },
           { label: "Reset Storage", panel: "panel-admin-storage" },
           { label: "Reset Settings", panel: "panel-admin-settings" },
@@ -3943,6 +4117,12 @@
           startTimerRealtimeFeed();
         } else {
           stopTimerRealtimeFeed();
+        }
+
+        if (panelId === "panel-admin-performance") {
+          startPerformanceMonitor();
+        } else if (typeof stopPerformanceMonitor === "function") {
+          stopPerformanceMonitor();
         }
 
         if (panelId === "panel-admin-location") {
