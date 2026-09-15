@@ -607,6 +607,49 @@
         stroke-linejoin: round;
       }
 
+      /* ── Signal Bars ── */
+      .signal-bars {
+        display: inline-flex;
+        align-items: flex-end;
+        gap: 3px;
+        height: 16px;
+        margin-left: 10px;
+      }
+      .signal-bar {
+        width: 4px;
+        background: rgba(255, 255, 255, 0.15);
+        border-radius: 1px;
+        transition: background 0.3s ease;
+      }
+      .signal-bar:nth-child(1) {
+        height: 6px;
+      }
+      .signal-bar:nth-child(2) {
+        height: 9px;
+      }
+      .signal-bar:nth-child(3) {
+        height: 12px;
+      }
+      .signal-bar:nth-child(4) {
+        height: 16px;
+      }
+
+      .signal-weak .signal-bar:nth-child(1) {
+        background: #ef4444;
+      } /* Red */
+      .signal-fair .signal-bar:nth-child(1),
+      .signal-fair .signal-bar:nth-child(2) {
+        background: #eab308;
+      } /* Yellow */
+      .signal-good .signal-bar:nth-child(1),
+      .signal-good .signal-bar:nth-child(2),
+      .signal-good .signal-bar:nth-child(3) {
+        background: #22c55e;
+      } /* Green */
+      .signal-excel .signal-bar {
+        background: #22c55e;
+      } /* All Green */
+
       /* ── Info Box ── */
       .info-box {
         background: rgba(37, 99, 235, 0.08);
@@ -2421,9 +2464,17 @@
             </div>
             <div class="status-row">
               <span class="status-key">Signal Strength</span>
-              <span class="status-value" id="wifiStatusSignal"
-                >Unavailable</span
-              >
+              <span class="status-value-actions" style="align-items: center">
+                <span class="status-value mono" id="wifiStatusSignalText"
+                  >Unavailable</span
+                >
+                <div class="signal-bars" id="wifiSignalBars">
+                  <div class="signal-bar"></div>
+                  <div class="signal-bar"></div>
+                  <div class="signal-bar"></div>
+                  <div class="signal-bar"></div>
+                </div>
+              </span>
             </div>
             <div class="status-row">
               <span class="status-key">Current IP Address</span>
@@ -4130,6 +4181,12 @@
           startPerformanceMonitor();
         } else if (typeof stopPerformanceMonitor === "function") {
           stopPerformanceMonitor();
+        }
+
+        if (panelId === "panel-wifi-disconnect") {
+          startWifiStatusMonitor();
+        } else if (typeof stopWifiStatusMonitor === "function") {
+          stopWifiStatusMonitor();
         }
 
         if (panelId === "panel-admin-location") {
@@ -7136,15 +7193,59 @@
         return String(value);
       }
 
-      function formatSignalStrength(connected, rssi) {
-        if (!connected) return "Unavailable";
-        var signalValue = typeof rssi === "number" ? rssi : parseInt(rssi, 10);
-        if (isNaN(signalValue)) return "Unavailable";
+      /* ══════════════════════════════════════════════════════════════
+         REALTIME WIFI SIGNAL UI
+      ══════════════════════════════════════════════════════════════ */
+      var wifiStatusInterval = null;
+
+      function updateWifiSignalUI(connected, rssi) {
+        var textEl = document.getElementById("wifiStatusSignalText");
+        var barsEl = document.getElementById("wifiSignalBars");
+        if (!textEl || !barsEl) return;
+
+        barsEl.className = "signal-bars"; // Reset all colors
+
+        if (!connected) {
+          textEl.textContent = "Unavailable";
+          return;
+        }
+
+        var signalValue = parseInt(rssi, 10);
+        if (isNaN(signalValue)) {
+          textEl.textContent = "Unavailable";
+          return;
+        }
+
         var quality = "Weak";
-        if (signalValue >= -55) quality = "Excellent";
-        else if (signalValue >= -67) quality = "Good";
-        else if (signalValue >= -75) quality = "Fair";
-        return signalValue + " dBm (" + quality + ")";
+        var barClass = "signal-weak"; // 1 bar (Red)
+
+        if (signalValue >= -55) {
+          quality = "Excellent";
+          barClass = "signal-excel"; // 4 bars (Green)
+        } else if (signalValue >= -67) {
+          quality = "Good";
+          barClass = "signal-good"; // 3 bars (Green)
+        } else if (signalValue >= -75) {
+          quality = "Fair";
+          barClass = "signal-fair"; // 2 bars (Yellow)
+        }
+
+        textEl.textContent = signalValue + " dBm (" + quality + ")";
+        barsEl.classList.add(barClass);
+      }
+
+      function startWifiStatusMonitor() {
+        loadWifiStatus(); // Fetch immediately on tab open
+        if (!wifiStatusInterval) {
+          wifiStatusInterval = setInterval(loadWifiStatus, 2000); // Poll every 2s
+        }
+      }
+
+      function stopWifiStatusMonitor() {
+        if (wifiStatusInterval) {
+          clearInterval(wifiStatusInterval);
+          wifiStatusInterval = null;
+        }
       }
 
       function setWifiText(id, value, fallback) {
@@ -7162,11 +7263,7 @@
               connected ? d.ssid : "Not connected",
               "Not connected",
             );
-            setWifiText(
-              "wifiStatusSignal",
-              formatSignalStrength(connected, d.rssi),
-              "Unavailable",
-            );
+            updateWifiSignalUI(connected, d.rssi);
             setWifiText("wifiStatusIp", connected ? d.ip : "", "Unavailable");
             setWifiText(
               "wifiStatusGateway",
