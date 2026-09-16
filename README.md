@@ -65,21 +65,21 @@ The settings page is organized into tabs with clear submenu panels.
 
 ### 5) Admin Tab
 
-| Menu                | Description                                                             | Screenshot                                             |
-| ------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------ |
-| Device Name         | Set hostname/device identity                                            | ![Device Name](screenshots/changeDeviceName.png)       |
-| mDNS Setup          | User can set custom mDNS                                                | ![mDNS Setup](screenshots/mdnsSetup.png)               |
-| Schedule Priority   | Choose automation conflict priority                                     | ![Schedule Priority](screenshots/schedulePriority.png) |
-| Time Setup          | Configure NTP server and timezone                                       | ![Time Setup](screenshots/timeSetup.png)               |
-| Temp & Hum          | User can monitor realtime room temperature and humidity with precision  | ![Temp & Hum](screenshots/tempAndHum.png)              |
-| Location Setup      | Set latitude/longitude and view sunrise/sunset                          | ![Location Setup](screenshots/locationSetup.png)       |
-| Performance         | User can monitor realtime ESP cpu, with RAM usage, Storage usage etc    | ![Performance](screenshots/performance.png)            |
-| Restart             | Configure weekly restart + manual restart                               | ![Restart Setup](screenshots/restartSetup.png)         |
-| Restart Progress UI | Live restart countdown/overlay flow                                     | ![Restart UI](screenshots/restartUI.png)               |
-| Reset Storage       | Clear names/icons/schedules/sensor automation/priority                  | ![Storage Reset](screenshots/storageReset.png)         |
-| Reset Settings      | Clear relay startup, firebase state, time settings, static IP, location | ![Settings Reset](screenshots/settingsReset.png)       |
-| Factory Reset       | Full wipe (storage + settings + users + wifi + firebase)                | ![Factory Reset](screenshots/hardReset.png)            |
-| Reset Progress UI   | Step-by-step reset progress with safety timing                          | ![Reset UI](screenshots/resetUI.png)                   |
+| Menu                | Description                                                            | Screenshot                                             |
+| ------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------ |
+| Device Name         | Set hostname/device identity                                           | ![Device Name](screenshots/changeDeviceName.png)       |
+| mDNS Setup          | User can set custom mDNS                                               | ![mDNS Setup](screenshots/mdnsSetup.png)               |
+| Schedule Priority   | Choose automation conflict priority                                    | ![Schedule Priority](screenshots/schedulePriority.png) |
+| Time Setup          | Configure NTP server and timezone                                      | ![Time Setup](screenshots/timeSetup.png)               |
+| Temp & Hum          | User can monitor realtime room temperature and humidity with precision | ![Temp & Hum](screenshots/tempAndHum.png)              |
+| Location Setup      | Set latitude/longitude and view sunrise/sunset                         | ![Location Setup](screenshots/locationSetup.png)       |
+| Performance         | User can monitor realtime ESP cpu, with RAM usage, Storage usage etc   | ![Performance](screenshots/performance.png)            |
+| Restart             | Configure weekly restart + manual restart                              | ![Restart Setup](screenshots/restartSetup.png)         |
+| Restart Progress UI | Live restart countdown/overlay flow                                    | ![Restart UI](screenshots/restartUI.png)               |
+| Reset Storage       | Clear names/icons/schedules/sensor automation/priority                 | ![Storage Reset](screenshots/storageReset.png)         |
+| Reset Settings      | Clear relay startup, mDNS, time, temp & hum, static IP, location       | ![Settings Reset](screenshots/settingsReset.png)       |
+| Factory Reset       | Full wipe (storage + settings + users + wifi + mDNS)                   | ![Factory Reset](screenshots/hardReset.png)            |
+| Reset Progress UI   | Step-by-step reset progress with safety timing                         | ![Reset UI](screenshots/resetUI.png)                   |
 
 ## Dashboard Overview
 
