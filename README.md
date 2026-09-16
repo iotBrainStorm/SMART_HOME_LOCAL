@@ -211,8 +211,8 @@ SMART_HOME/
 |  |- config.html.gz         # Full settings UI
 |  |- index.svg.gz
 |  |- settings.svg.gz
-|- backup/									 # for future edit
-|	 |- index.html
+|- backup/
+|  |- index.html
 |  |- config.html
 |  |- index.svg
 |  |- settings.svg
