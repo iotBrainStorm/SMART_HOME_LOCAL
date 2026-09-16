@@ -108,6 +108,12 @@ String mdnsName = "";
 bool timeSynced = false;
 bool ahtOk = false;
 bool locOk = true;
+bool showTemp = false;
+bool showHumid = false;
+int tempPrecision = 0;
+int humidPrecision = 0;
+float currentTemp = 0.0f;
+float currentHumid = 0.0f;
 
 uint8_t automationPriorityOrder[AUTOMATION_SOURCE_COUNT] = {
     AUTOMATION_TIMER, AUTOMATION_SCHEDULE, AUTOMATION_FUTURE_SCHEDULE,
@@ -531,6 +537,10 @@ void loadAdminSettings() {
   loadedRestartScheduleEnabled = prefs.getBool("rsEn", false);
   loadedRestartScheduleMinute = prefs.getInt("rsMin", -1);
   loadedRestartScheduleDayMask = (uint8_t)prefs.getUInt("rsMask", 0);
+  showTemp = prefs.getBool("shwT", false);
+  showHumid = prefs.getBool("shwH", false);
+  tempPrecision = prefs.getInt("prcT", 0);
+  humidPrecision = prefs.getInt("prcH", 0);
   for (int i = 0; i < AUTOMATION_SOURCE_COUNT; i++) {
     loadedPriority[i] = (uint8_t)prefs.getInt(("pr" + String(i)).c_str(), i);
   }
@@ -836,6 +846,20 @@ void resetLocationToDefault() {
   calcSunriseSunset();
 }
 
+void resetTempHumDisplayToDefault() {
+  showTemp = false;
+  showHumid = false;
+  tempPrecision = 0;
+  humidPrecision = 0;
+
+  prefs.begin("admin", false);
+  prefs.remove("shwT");
+  prefs.remove("shwH");
+  prefs.remove("prcT");
+  prefs.remove("prcH");
+  prefs.end();
+}
+
 void resetRelayStatesToDefault() {
   prefs.begin("sw", false);
   for (int i = 0; i < NUM_SWITCHES; i++) {
@@ -850,12 +874,17 @@ void resetRelayStatesToDefault() {
 
 void resetDeviceNameToDefault() {
   deviceName = getDefaultDeviceName();
-  mdnsName = getDefaultMdnsName();
   prefs.begin("admin", false);
   prefs.putString("devname", deviceName);
-  prefs.putString("mdns", mdnsName);
   prefs.end();
   WiFi.setHostname(deviceName.c_str());
+}
+
+void resetMdnsNameToDefault() {
+  mdnsName = getDefaultMdnsName();
+  prefs.begin("admin", false);
+  prefs.putString("mdns", mdnsName);
+  prefs.end();
 
   MDNS.end();
   MDNS.begin(mdnsName.c_str());
@@ -1638,14 +1667,14 @@ void checkRestartSchedule() {
 }
 
 void checkSensors() {
-  float cTemp = 0.0f;
-  float cHum = 0.0f;
   if (ahtOk) {
     sensors_event_t hev, tev;
     aht.getEvent(&hev, &tev);
-    cTemp = tev.temperature;
-    cHum = hev.relative_humidity;
+    currentTemp = tev.temperature;
+    currentHumid = hev.relative_humidity;
   }
+  float cTemp = currentTemp;
+  float cHum = currentHumid;
 
   for (int sw = 0; sw < NUM_SWITCHES; sw++) {
     prefs.begin("sensor", true);
@@ -1736,8 +1765,8 @@ bool connectToSavedWiFi() {
   while (attempts < WIFI_CONNECT_MAX_ATTEMPTS) {
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println("[OK] WiFi Connected");
-      Serial.printf("     SSID: %s\n", WiFi.SSID().c_str());
-      Serial.printf("     IP:   %s\n", WiFi.localIP().toString().c_str());
+      Serial.printf("SSID: %s\n", WiFi.SSID().c_str());
+      Serial.printf("IP:   %s\n", WiFi.localIP().toString().c_str());
       WiFi.setSleep(false);
       delay(2000);
       return true;
@@ -1812,13 +1841,22 @@ void setupWebServer() {
 
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *req) {
     JsonDocument d;
+
     d["timeSynced"] = timeSynced;
     d["ahtOk"] = ahtOk;
     d["locOk"] = locOk;
     d["wifiOk"] = (WiFi.status() == WL_CONNECTED);
     d["mac"] = WiFi.macAddress();
+    d["showTemp"] = showTemp;
+    d["showHumid"] = showHumid;
+    d["tempPrec"] = tempPrecision;
+    d["humidPrec"] = humidPrecision;
 
-    // DIRECT ASYNC RESPONSE STREAM (SAVES MASSIVE RAM vs String copying)
+    if (ahtOk) {
+      d["temp"] = currentTemp;
+      d["humid"] = currentHumid;
+    }
+
     AsyncResponseStream *response = req->beginResponseStream("application/json");
     serializeJson(d, *response);
     req->send(response);
@@ -2914,6 +2952,41 @@ void setupWebServer() {
       req->send(response);
     });
 
+    server.on("/api/admin/temphum", HTTP_GET, [](AsyncWebServerRequest *req) {
+      JsonDocument d;
+      d["showTemp"] = showTemp;
+      d["showHumid"] = showHumid;
+      d["tempPrec"] = tempPrecision;
+      d["humidPrec"] = humidPrecision;
+      d["ahtOk"] = ahtOk;
+      AsyncResponseStream *response = req->beginResponseStream("application/json");
+      serializeJson(d, *response);
+      req->send(response);
+    });
+
+    server.on("/api/admin/temphum", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!requireAdminVerification(req))
+        return;
+      if (req->hasParam("showTemp", true))
+        showTemp = req->getParam("showTemp", true)->value() == "true";
+      if (req->hasParam("showHumid", true))
+        showHumid = req->getParam("showHumid", true)->value() == "true";
+      if (req->hasParam("tempPrec", true))
+        tempPrecision = req->getParam("tempPrec", true)->value().toInt();
+      if (req->hasParam("humidPrec", true))
+        humidPrecision = req->getParam("humidPrec", true)->value().toInt();
+
+      prefs.begin("admin", false);
+      prefs.putBool("shwT", showTemp);
+      prefs.putBool("shwH", showHumid);
+      prefs.putInt("prcT", tempPrecision);
+      prefs.putInt("prcH", humidPrecision);
+      prefs.end();
+      notifyStorage();
+
+      req->send(200, "application/json", "{\"ok\":true}");
+    });
+
     server.on("/api/admin/restart-schedule", HTTP_GET, [](AsyncWebServerRequest *req) {
       JsonDocument d;
       d["enabled"] = restartScheduleEnabled;
@@ -3017,6 +3090,23 @@ void setupWebServer() {
       restartAt = millis() + 500;
     });
 
+    server.on("/api/admin/performance", HTTP_GET, [](AsyncWebServerRequest *req) {
+      JsonDocument d;
+      d["cpuFreq"] = ESP.getCpuFreqMHz();
+      d["cpuTemp"] = temperatureRead();
+      d["freeHeap"] = ESP.getFreeHeap();
+      d["minHeap"] = ESP.getMinFreeHeap();
+      d["maxBlock"] = ESP.getMaxAllocHeap();
+      d["heapSize"] = ESP.getHeapSize();
+      d["spiffsUsed"] = SPIFFS.usedBytes();
+      d["spiffsTotal"] = SPIFFS.totalBytes();
+      d["uptime"] = millis() / 1000;
+
+      AsyncResponseStream *response = req->beginResponseStream("application/json");
+      serializeJson(d, *response);
+      req->send(response);
+    });
+
     server.on("/api/admin/reset/storage", HTTP_POST, [](AsyncWebServerRequest *req) {
       if (!requireAdminVerification(req))
         return;
@@ -3088,6 +3178,8 @@ void setupWebServer() {
       addResetStep(steps, "relay-states", "Relay startup state restored to Output OFF for all switches", 640);
       resetDeviceNameToDefault();
       addResetStep(steps, "device-name", "Device name reset to MAC-based default", 450);
+      resetMdnsNameToDefault();
+      addResetStep(steps, "mdns-name", "mDNS address reset to MAC-based default", 400);
       resetNtpServerToDefault();
       addResetStep(steps, "ntp", "NTP server reset to pool.ntp.org", 430);
       resetTimezoneToDefault();
@@ -3096,6 +3188,8 @@ void setupWebServer() {
       addResetStep(steps, "static-ip", "Static IP configuration cleared and DHCP restored", 520);
       resetLocationToDefault();
       addResetStep(steps, "location", "Latitude and longitude reset to London defaults", 600);
+      resetTempHumDisplayToDefault();
+      addResetStep(steps, "temp-hum", "Temperature and humidity display settings cleared", 420);
       clearRestartScheduleOnly();
       addResetStep(steps, "restart-schedule", "Automatic restart schedule cleared", 460);
       notifyStorage();
@@ -3104,7 +3198,7 @@ void setupWebServer() {
       serializeJson(responseDoc, *response);
       req->send(response);
       restartFlag = true;
-      restartAt = millis() + (7UL * RESET_CHECKPOINT_GAP_MS) + RESET_ALL_DONE_GAP_MS + RESET_RESTART_BUFFER_MS;
+      restartAt = millis() + (9UL * RESET_CHECKPOINT_GAP_MS) + RESET_ALL_DONE_GAP_MS + RESET_RESTART_BUFFER_MS;
     });
 
     server.on("/api/admin/reset/factory", HTTP_POST, [](AsyncWebServerRequest *req) {
@@ -3138,9 +3232,11 @@ void setupWebServer() {
       clearStaticIpConfiguration();
       resetSchedulePriorityToDefault();
       resetLocationToDefault();
+      resetTempHumDisplayToDefault();
       addResetStep(steps, "reset-storage", "Reset Storage applied", 980);
       resetRelayStatesToDefault();
       resetDeviceNameToDefault();
+      resetMdnsNameToDefault();
       resetNtpServerToDefault();
       resetTimezoneToDefault();
       clearRestartScheduleOnly();
@@ -3266,9 +3362,9 @@ void setup() {
   pendingWebServerRestart = false;
 
   Serial.println("==============================");
-  Serial.println("  System Ready");
+  Serial.println("System Ready");
   if (WiFi.status() == WL_CONNECTED)
-    Serial.printf("  IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
   Serial.println("==============================\n");
 }
 

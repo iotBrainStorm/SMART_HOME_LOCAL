@@ -1138,6 +1138,15 @@
           .catch(function () {});
       }
 
+      var envData = {
+        showTemp: false,
+        showHumid: false,
+        tempPrec: 0,
+        humidPrec: 0,
+        temp: null,
+        humid: null,
+      };
+
       function updateClock() {
         var now = getDeviceTimezoneDate();
         var h = String(now.getHours()).padStart(2, "0");
@@ -1146,8 +1155,38 @@
         var d = now.getDate();
         var mon = months[now.getMonth()];
         var y = now.getFullYear();
-        document.getElementById("datetime").textContent =
-          d + " " + mon + " " + y + " | " + h + ":" + m + ":" + s;
+
+        var baseStr = d + " " + mon + " " + y + " | " + h + ":" + m + ":" + s;
+
+        if (envData.showTemp && envData.temp !== null) {
+          baseStr +=
+            " | " + Number(envData.temp).toFixed(envData.tempPrec) + "°C";
+        }
+        if (envData.showHumid && envData.humid !== null) {
+          baseStr +=
+            " | " + Number(envData.humid).toFixed(envData.humidPrec) + "%";
+        }
+
+        document.getElementById("datetime").textContent = baseStr;
+      }
+
+      function loadEnvStatus() {
+        fetch("/api/status", { cache: "no-store" })
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (d) {
+            if (d) {
+              envData.showTemp = !!d.showTemp;
+              envData.showHumid = !!d.showHumid;
+              envData.tempPrec = d.tempPrec || 0;
+              envData.humidPrec = d.humidPrec || 0;
+              // Will be null if AHT10 is disconnected (backend doesn't send it)
+              envData.temp = d.temp !== undefined ? d.temp : null;
+              envData.humid = d.humid !== undefined ? d.humid : null;
+            }
+          })
+          .catch(function () {});
       }
 
       function normalizeIconName(iconName) {
@@ -1642,6 +1681,7 @@
 
           setTimeout(function () {
             loadSwitches();
+            loadEnvStatus();
           }, 250);
 
           setTimeout(function () {
@@ -1657,6 +1697,7 @@
           !document.getElementById("dashboard").classList.contains("hidden")
         ) {
           loadSwitches();
+          loadEnvStatus();
         }
       }, 5000);
 

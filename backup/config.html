@@ -2825,9 +2825,8 @@
           <div class="panel-title">Device Name</div>
           <div class="info-box">
             It is recommended to set your device name human understandable as
-            short as possible (like: bedroomGndFlr, bathroomTopFlr etc.).
-            Modification of device name can be done by admin verification and
-            saved into ESP memory.
+            short as possible. Modification of device name can be done by admin
+            verification.
           </div>
           <div class="setting-row">
             <div class="setting-info">
@@ -2865,12 +2864,12 @@
           <div class="panel-title">mDNS Setup</div>
           <div class="info-box">
             Configure the local network address (mDNS) to access your ESP32
-            without an IP address. For example, if you set "livingroom", you can
-            access it at <strong>http://livingroom.local</strong>.
+            without an IP address. <br />You can access it at
+            <strong>http://livingroom.local</strong>
           </div>
           <div class="setting-row">
             <div class="setting-info">
-              <div class="setting-label">Default mDNS Name</div>
+              <div class="setting-label">Current mDNS Name</div>
               <div class="setting-sub" id="defaultMdnsName">Loading...</div>
             </div>
           </div>
@@ -3049,8 +3048,10 @@
             <ul class="reset-param-list">
               <li>Clear gpio state during startup</li>
               <li>Clear device name</li>
+              <li>Clear custom mDNS setup</li>
               <li>Clear NTP server</li>
               <li>Clear time zone</li>
+              <li>Clear Temperature and Humidity</li>
               <li>Clear static IP configuration</li>
               <li>Clear geo-location latitude and longitude</li>
               <li>Clear restart schedule</li>
@@ -3199,6 +3200,73 @@
               onclick="saveTimeSettings()"
             >
               Save Time Settings
+            </button>
+          </div>
+        </div>
+
+        <!-- Temp Hum Setup -->
+        <div class="panel" id="panel-admin-temphum">
+          <div class="panel-title">Temperature & Humidity Display</div>
+          <div class="info-box">
+            Live temperature and humidity on the dashboard clock, and set the
+            decimal precision. <br />
+            <strong>Note:</strong> Requires an active AHT10 sensor.
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Show Temperature</div>
+              <div class="setting-sub">Display temperature on home screen</div>
+            </div>
+            <label class="sm-toggle">
+              <input type="checkbox" id="cfgShowTemp" />
+              <span class="sm-toggle-track"></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Temperature Precision</div>
+            </div>
+            <select class="cfg-input" id="cfgTempPrec" style="max-width: 180px">
+              <option value="0">None</option>
+              <option value="1">1 Decimal</option>
+              <option value="2">2 Decimals</option>
+            </select>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Show Humidity</div>
+              <div class="setting-sub">Display humidity on home screen</div>
+            </div>
+            <label class="sm-toggle">
+              <input type="checkbox" id="cfgShowHumid" />
+              <span class="sm-toggle-track"></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Humidity Precision</div>
+            </div>
+            <select
+              class="cfg-input"
+              id="cfgHumidPrec"
+              style="max-width: 180px"
+            >
+              <option value="0">None</option>
+              <option value="1">1 Decimal</option>
+              <option value="2">2 Decimals</option>
+            </select>
+          </div>
+
+          <div style="margin-top: 16px; text-align: right">
+            <button
+              class="cfg-btn cfg-btn-primary"
+              onclick="saveTempHumSettings()"
+            >
+              Save Display Settings
             </button>
           </div>
         </div>
@@ -4098,6 +4166,7 @@
             panel: "panel-admin-schedule-priority",
           },
           { label: "Time Setup", panel: "panel-admin-time" },
+          { label: "Temp & Hum", panel: "panel-admin-temphum" },
           { label: "Location Setup", panel: "panel-admin-location" },
           { label: "Performance", panel: "panel-admin-performance" },
           { label: "Restart", panel: "panel-admin-restart" },
@@ -4204,6 +4273,10 @@
 
         if (panelId === "panel-admin-location") {
           loadAdminLocationSettings();
+        }
+
+        if (panelId === "panel-admin-temphum") {
+          loadTempHumSettings();
         }
 
         var sideItems = sidebar.querySelectorAll(".sidebar-item");
@@ -6638,10 +6711,26 @@
           .then(function (d) {
             var defaultEl = document.getElementById("defaultMdnsName");
             if (defaultEl) {
-              defaultEl.textContent =
-                d && d.defaultMdns
-                  ? "http://" + d.defaultMdns + ".local"
-                  : "Unavailable";
+              // Determine current mDNS (use custom if set, otherwise fallback to default)
+              var currentMdns =
+                d && d.mdns
+                  ? d.mdns
+                  : d && d.defaultMdns
+                    ? d.defaultMdns
+                    : null;
+
+              if (currentMdns) {
+                var url = "http://" + currentMdns + ".local";
+                // Inject a clickable anchor tag
+                defaultEl.innerHTML =
+                  '<a href="' +
+                  url +
+                  '" target="_blank" style="color: #60a5fa; text-decoration: underline;">' +
+                  url +
+                  "</a>";
+              } else {
+                defaultEl.textContent = "Unavailable";
+              }
             }
             var input = document.getElementById("adminMdnsName");
             if (input) {
@@ -7051,7 +7140,9 @@
                 }, finalGapMs);
               };
 
-              animateResetChecklist(view, onChecklistComplete);
+              window.setTimeout(function () {
+                animateResetChecklist(view, onChecklistComplete);
+              }, 50);
             })
             .catch(function () {
               showResetRuntimeMessage(
@@ -7405,6 +7496,70 @@
           .catch(function () {
             alert("Connection error");
           });
+      }
+
+      /* ══════════════════════════════════════════════════════════════
+         TEMP & HUM DISPLAY SETUP
+      ══════════════════════════════════════════════════════════════ */
+      function loadTempHumSettings() {
+        apiGet("/api/admin/temphum")
+          .then(function (d) {
+            if (d) {
+              var elShowTemp = document.getElementById("cfgShowTemp");
+              if (elShowTemp) elShowTemp.checked = !!d.showTemp;
+
+              var elShowHum = document.getElementById("cfgShowHumid");
+              if (elShowHum) elShowHum.checked = !!d.showHumid;
+
+              var elTempPrec = document.getElementById("cfgTempPrec");
+              if (elTempPrec && d.tempPrec !== undefined)
+                elTempPrec.value = String(d.tempPrec);
+
+              var elHumPrec = document.getElementById("cfgHumidPrec");
+              if (elHumPrec && d.humidPrec !== undefined)
+                elHumPrec.value = String(d.humidPrec);
+            }
+          })
+          .catch(function () {});
+      }
+
+      function saveTempHumSettings() {
+        var showTemp = document.getElementById("cfgShowTemp").checked;
+        var showHumid = document.getElementById("cfgShowHumid").checked;
+        var tempPrec = document.getElementById("cfgTempPrec").value;
+        var humidPrec = document.getElementById("cfgHumidPrec").value;
+
+        showPasswordModal(
+          "Enter admin credentials to save Temp/Hum settings",
+          function (data, adminUser, adminPass) {
+            apiPost(
+              "/api/admin/temphum",
+              appendAdminCredentials(
+                "showTemp=" +
+                  showTemp +
+                  "&showHumid=" +
+                  showHumid +
+                  "&tempPrec=" +
+                  tempPrec +
+                  "&humidPrec=" +
+                  humidPrec,
+                adminUser,
+                adminPass,
+              ),
+            )
+              .then(function (d) {
+                if (d.ok) {
+                  alert("Display settings saved successfully!");
+                  loadTempHumSettings();
+                } else {
+                  alert(d.error || "Save failed");
+                }
+              })
+              .catch(function () {
+                alert("Connection error");
+              });
+          },
+        );
       }
 
       /* ══════════════════════════════════════════════════════════════
@@ -8370,6 +8525,12 @@
         setTimeout(
           function () {
             loadAdminLocationSettings();
+          },
+          (loadDelay += delayStep),
+        );
+        setTimeout(
+          function () {
+            loadTempHumSettings();
           },
           (loadDelay += delayStep),
         );
