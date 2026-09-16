@@ -1,12 +1,6 @@
 # SMART_HOME_LOCAL
 
-![ESP32](https://img.shields.io/badge/ESP32-Controller-ff6f00?style=for-the-badge&logo=espressif&logoColor=white)
-![Web Dashboard](https://img.shields.io/badge/Web-Dashboard-0288d1?style=for-the-badge&logo=googlechrome&logoColor=white)
-![Automation](https://img.shields.io/badge/Automation-Timer%20%7C%20Schedule%20%7C%20Sensor-2e7d32?style=for-the-badge)
-![Firebase Ready](https://img.shields.io/badge/Firebase-Ready-f57c00?style=for-the-badge&logo=firebase&logoColor=white)
-![License](https://img.shields.io/badge/License-Custom-d81b60?style=for-the-badge)
-
-A modern ESP32 Smart Home controller with a full web dashboard, rich automation engine, user/admin management, WiFi networking tools, and Firebase integration.
+A modern ESP32 Smart Home controller with a full web dashboard with rich automation engine.
 
 ![Dashboard](screenshots/controlDashboard.png)
 
@@ -18,8 +12,10 @@ A modern ESP32 Smart Home controller with a full web dashboard, rich automation 
 - Automation priority engine (resolve conflicts by your chosen order)
 - Full user management with admin verification
 - WiFi setup + status + forget + DHCP/static IP configuration
-- Firebase URL/token/rules/auth user management
-- Admin utilities: device name, restart schedule, location setup, reset workflows
+- Accessible through mDNS, not need IP
+- Admin utilities: device name, custum mDNS, restart schedule, location setup, reset workflows
+- Temperature and Humidity Precision
+- Performance checkup, real time ESP cpu monitoring
 - Strong reset UX with BOOT-hold protection and checklist progress
 
 ## Menu and Submenu Guide
@@ -58,18 +54,7 @@ The settings page is organized into tabs with clear submenu panels.
 | IP Settings (DHCP)   | Use router-assigned addressing                 | ![DHCP IP](screenshots/dhcpIP.png)                   |
 | IP Settings (Static) | Configure static IP, gateway, DNS              | ![Static IP](screenshots/staticIP.png)               |
 
-### 4) Firebase Tab
-
-| Menu / Submenu              | Description                                         | Screenshot                                         |
-| --------------------------- | --------------------------------------------------- | -------------------------------------------------- |
-| On / Off                    | Enable/disable cloud sync mode                      | ![Firebase Toggle](screenshots/firebaseUrl.png)    |
-| Database URL                | Save and validate RTDB URL                          | ![Firebase URL](screenshots/firebaseUrl.png)       |
-| Auth Token                  | Securely store DB token (masked/reveal workflow)    | ![Firebase Secret](screenshots/firebaseSecret.png) |
-| DB Rules                    | View/update Firebase security rules JSON            | ![Database Rules](screenshots/databaseRules.png)   |
-| Authentication > Add User   | Add local Firebase auth users for provisioning flow | ![Add Firebase User](screenshots/addFBUsers.png)   |
-| Authentication > Show Users | Review/remove saved Firebase auth users             | ![Firebase Users](screenshots/firebaseUsers.png)   |
-
-### 5) User Tab
+### 4) User Tab
 
 | Menu        | Description                       | Screenshot                                         |
 | ----------- | --------------------------------- | -------------------------------------------------- |
@@ -78,14 +63,17 @@ The settings page is organized into tabs with clear submenu panels.
 | Remove User | Remove normal user accounts       | ![Remove ESP User](screenshots/removeESPUsers.png) |
 | Edit Admin  | Change admin ID/password securely | ![Edit Admin](screenshots/editAdmin.png)           |
 
-### 6) Admin Tab
+### 5) Admin Tab
 
 | Menu                | Description                                                             | Screenshot                                             |
 | ------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------ |
 | Device Name         | Set hostname/device identity                                            | ![Device Name](screenshots/changeDeviceName.png)       |
+| mDNS Setup          | User can set custom mDNS                                                | ![mDNS Setup](screenshots/mdnsSetup.png)               |
 | Schedule Priority   | Choose automation conflict priority                                     | ![Schedule Priority](screenshots/schedulePriority.png) |
 | Time Setup          | Configure NTP server and timezone                                       | ![Time Setup](screenshots/timeSetup.png)               |
+| Temp & Hum          | User can monitor realtime room temperature and humidity with precision  | ![Temp & Hum](screenshots/tempAndHum.png)              |
 | Location Setup      | Set latitude/longitude and view sunrise/sunset                          | ![Location Setup](screenshots/locationSetup.png)       |
+| Performance         | User can monitor realtime ESP cpu, with RAM usage, Storage usage etc    | ![Performance](screenshots/performance.png)            |
 | Restart             | Configure weekly restart + manual restart                               | ![Restart Setup](screenshots/restartSetup.png)         |
 | Restart Progress UI | Live restart countdown/overlay flow                                     | ![Restart UI](screenshots/restartUI.png)               |
 | Reset Storage       | Clear names/icons/schedules/sensor automation/priority                  | ![Storage Reset](screenshots/storageReset.png)         |
@@ -105,7 +93,7 @@ The settings page is organized into tabs with clear submenu panels.
 ## Core Technical Features
 
 - ESPAsyncWebServer based API and static web app delivery
-- Preferences (NVS) storage across namespaces: sw, wfcfg, fb, admin, users, sched, fsched, sensor
+- Preferences (NVS) storage across namespaces: sw, wfcfg, mdns, admin, users, sched, fsched, sensor
 - Sunrise/sunset calculations using Dusk2Dawn + geolocation + timezone
 - AHT10 integration for temperature/humidity automation
 - Safe admin actions protected by credential checks and BOOT-hold flow
@@ -195,7 +183,6 @@ Note: If your relay board is active-low, adjust wiring logic or relay module set
 | Preferences (ESP32 Core)     | https://docs.espressif.com/projects/arduino-esp32/en/latest/api/preferences.html | Built into ESP32 Arduino core   |
 | Adafruit AHTX0 (AHT10/AHT20) | https://github.com/adafruit/Adafruit_AHTX0                                       | Sensor support for AHT10        |
 | Dusk2Dawn                    | https://github.com/dmkishi/Dusk2Dawn                                             | Sunrise and sunset calculations |
-| FirebaseClient (Mobizt)      | https://github.com/mobizt/FirebaseClient                                         | Firebase integration            |
 
 ### Build and Flash Steps
 
@@ -209,8 +196,8 @@ Note: If your relay board is active-low, adjust wiring logic or relay module set
 
 ## First Login
 
-- Default admin user: esp
-- Default admin password: 456456
+- Default admin user: <span style="color: #00C853;">esp</span>
+- Default admin password: <span style="color: #FF5252;">456456</span>
 
 Change admin credentials immediately from User -> Edit Admin.
 
@@ -218,13 +205,18 @@ Change admin credentials immediately from User -> Edit Admin.
 
 ```text
 SMART_HOME/
-|- SMART_HOME.ino         # Main firmware and API routes
+|- SMART_HOME_LOCAL.ino         # Main firmware and API routes
 |- data/
-|  |- index.html          # Dashboard/login
-|  |- config.html         # Full settings UI
+|  |- index.html.gz          # Dashboard/login
+|  |- config.html.gz         # Full settings UI
+|  |- index.svg.gz
+|  |- settings.svg.gz
+|- backup/									 # for future edit
+|	 |- index.html
+|  |- config.html
 |  |- index.svg
 |  |- settings.svg
-|- screenshots/           # README screenshots
+|- screenshots/              # README screenshots
 |- README.md
 |- LICENSE
 ```
