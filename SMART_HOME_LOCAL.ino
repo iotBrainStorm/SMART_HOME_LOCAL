@@ -8,7 +8,6 @@
 #include <Adafruit_AHT10.h>
 #include <ArduinoJson.h>
 #include <Dusk2Dawn.h>
-#include <EEPROM.h>
 #include <ESPAsyncWebServer.h>
 #include <ESPmDNS.h>
 #include <HTTPClient.h>
@@ -61,6 +60,7 @@ const char *DEFAULT_SWITCH_ICONS[NUM_SWITCHES] = {"home", "home", "home",
 AsyncWebServer server(80);
 Preferences prefs;
 Adafruit_AHT10 aht;
+volatile bool pendingWebServerRestart = false;
 
 // STATE VARIABLES
 bool swState[NUM_SWITCHES] = {false, false, false, false};
@@ -73,7 +73,6 @@ enum RelayModeType : uint8_t {
 };
 RelayModeType relayMode[NUM_SWITCHES] = {RELAY_MODE_OFF, RELAY_MODE_OFF, RELAY_MODE_OFF, RELAY_MODE_OFF};
 
-bool pendingWebServerRestart = false;
 bool nvsRelayDirty[NUM_SWITCHES] = {false, false, false, false};
 
 // Timers - volatile (RAM only, lost on power cut)
@@ -105,7 +104,7 @@ long gmtOff = 0;
 float geoLat = DEFAULT_LATITUDE, geoLon = DEFAULT_LONGITUDE;
 String deviceName = "";
 String mdnsName = "";
-bool timeSynced = false;
+volatile bool timeSynced = false;
 bool ahtOk = false;
 bool locOk = true;
 bool showTemp = false;
@@ -129,8 +128,11 @@ int srMin = 0, ssMin = 0, lastCalcDay = -1;
 
 // Input debounce
 bool lastInState[NUM_SWITCHES];
+bool rawInState[NUM_SWITCHES];
 unsigned long lastDbMs[NUM_SWITCHES] = {0};
 const unsigned long DB_DELAY = 50;
+unsigned long lastWifiRetryMs = 0;
+bool webServerRunning = false;
 
 // Loop intervals
 unsigned long lastSchedCheck = 0;
@@ -184,9 +186,9 @@ static void oomNewHandler() {
   esp_restart();
 }
 
-// BEEP + LED ON NVS CHANGE
+// BEEP + LED ON NVS CHANGE (49-day rollover safe)
 void serviceNotifyStorage() {
-  if (notifyStorageOffAt && millis() >= notifyStorageOffAt) {
+  if (notifyStorageOffAt && (int32_t)(millis() - notifyStorageOffAt) >= 0) {
     notifyStorageOffAt = 0;
     digitalWrite(BUZZER_PIN, LOW);
     digitalWrite(LED_PIN, LOW);
@@ -197,6 +199,8 @@ void notifyStorage() {
   digitalWrite(LED_PIN, HIGH);
   digitalWrite(BUZZER_PIN, HIGH);
   notifyStorageOffAt = millis() + 100;
+  if (notifyStorageOffAt == 0)
+    notifyStorageOffAt = 1;
 }
 
 // TIMEZONE PARSING "+00:00" -> seconds
@@ -214,10 +218,11 @@ void parseTZ() {
 }
 
 void loadTimeSettingsFromAdminStorage() {
-  prefs.begin("admin", true);
-  String storedNtp = prefs.getString("ntp", ntpSrv);
-  String storedTz = prefs.getString("tz", tzStr);
-  prefs.end();
+  Preferences localPrefs;
+  localPrefs.begin("admin", true);
+  String storedNtp = localPrefs.getString("ntp", ntpSrv);
+  String storedTz = localPrefs.getString("tz", tzStr);
+  localPrefs.end();
 
   storedNtp.trim();
   if (!storedNtp.isEmpty()) {
@@ -232,14 +237,15 @@ void loadTimeSettingsFromAdminStorage() {
   parseTZ();
 }
 
-// LOAD ALL SETTINGS FROM NVS
+// LOAD SWITCH SETTINGS & PRE-LATCH RELAY PINS WITHOUT FLICKER
 void loadSwitchSettings() {
-  prefs.begin("sw", true);
+  Preferences localPrefs;
+  localPrefs.begin("sw", true);
   for (int i = 0; i < NUM_SWITCHES; i++) {
-    swName[i] = prefs.getString(("n" + String(i)).c_str(), swName[i]);
-    swIcon[i] = prefs.getString(("i" + String(i)).c_str(), swIcon[i]);
+    swName[i] = localPrefs.getString(("n" + String(i)).c_str(), swName[i]);
+    swIcon[i] = localPrefs.getString(("i" + String(i)).c_str(), swIcon[i]);
 
-    String modeStr = prefs.getString(("r" + String(i)).c_str(), "off");
+    String modeStr = localPrefs.getString(("r" + String(i)).c_str(), "off");
 
     if (modeStr == "on") {
       relayMode[i] = RELAY_MODE_ON;
@@ -253,13 +259,15 @@ void loadSwitchSettings() {
     if (relayMode[i] == RELAY_MODE_ON) {
       initialState = true;
     } else if (relayMode[i] == RELAY_MODE_REMEMBER) {
-      initialState = prefs.getBool(("l" + String(i)).c_str(), false);
+      initialState = localPrefs.getBool(("l" + String(i)).c_str(), false);
     }
 
     writeSwState(i, initialState);
+    // 1. Set HIGH/LOW latch FIRST, 2. Enable OUTPUT mode SECOND (zero flicker)
     digitalWrite(outPin[i], initialState ? HIGH : LOW);
+    pinMode(outPin[i], OUTPUT);
   }
-  prefs.end();
+  localPrefs.end();
 }
 
 void loadWifiSettings() {
@@ -273,10 +281,11 @@ void loadWifiSettings() {
 }
 
 bool getSavedWifiCredentials(String &ssid, String &pass) {
-  prefs.begin("wfcfg", true);
-  ssid = prefs.getString("ssid", "");
-  pass = prefs.getString("pass", "");
-  prefs.end();
+  Preferences localPrefs;
+  localPrefs.begin("wfcfg", true);
+  ssid = localPrefs.getString("ssid", "");
+  pass = localPrefs.getString("pass", "");
+  localPrefs.end();
   return !ssid.isEmpty();
 }
 
@@ -358,7 +367,9 @@ bool runWifiConfigPortal(bool notifyChange = false,
   }
 
   Serial.println("\n[ERROR] Config Portal Timeout!");
-  delay(1000);
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  delay(200);
   return false;
 }
 
@@ -907,10 +918,11 @@ void resetTimezoneToDefault() {
 }
 
 void clearWifiCredentialsOnly() {
-  prefs.begin("wfcfg", false);
-  prefs.remove("ssid");
-  prefs.remove("pass");
-  prefs.end();
+  Preferences localPrefs;
+  localPrefs.begin("wfcfg", false);
+  localPrefs.remove("ssid");
+  localPrefs.remove("pass");
+  localPrefs.end();
 }
 
 void resetUsersToSingleDefaultAdmin() {
@@ -1244,10 +1256,13 @@ bool readCurrentLocalTime(struct tm *ti) {
   return true;
 }
 
+static char ntpServerBuf[64] = "pool.ntp.org";
+volatile bool ntpResyncPending = false;
+volatile bool sunCalcPending = false;
+
 void sntpTimeAvailableCallback(struct timeval *t) {
-  Serial.println("[TIME] Time synced");
   timeSynced = true;
-  calcSunriseSunset();
+  sunCalcPending = true; // Handled safely inside loop()
 }
 
 bool syncTime(struct tm *syncedTime = nullptr) {
@@ -1256,9 +1271,13 @@ bool syncTime(struct tm *syncedTime = nullptr) {
   loadTimeSettingsFromAdminStorage();
   ntpSrv.trim();
   if (ntpSrv.isEmpty())
-    ntpSrv = "pool.ntp.org";
+    ntpSrv = DEFAULT_NTP_SERVER;
+
+  strncpy(ntpServerBuf, ntpSrv.c_str(), sizeof(ntpServerBuf) - 1);
+  ntpServerBuf[sizeof(ntpServerBuf) - 1] = '\0';
+
   sntp_set_time_sync_notification_cb(sntpTimeAvailableCallback);
-  configTime(gmtOff, 0, ntpSrv.c_str(), "pool.ntp.org", "time.nist.gov");
+  configTime(gmtOff, 0, ntpServerBuf, "pool.ntp.org", "time.nist.gov");
   return true;
 }
 
@@ -1274,7 +1293,7 @@ void calcSunriseSunset() {
     return;
 
   int tzH = gmtOff / 3600;
-  int tzM = (abs(gmtOff) % 3600) / 60;
+  int tzM = (gmtOff % 3600) / 60; // Preserves sign for negative timezones
   Dusk2Dawn loc(geoLat, geoLon, tzH);
 
   int sunriseMinute = loc.sunrise(ti.tm_year + 1900, ti.tm_mon + 1, day, false);
@@ -1304,7 +1323,8 @@ void calcSunriseSunset() {
 void checkTimers() {
   unsigned long now = millis();
   for (int i = 0; i < NUM_SWITCHES; i++) {
-    if (swTimers[i].active && !swTimers[i].paused && now >= swTimers[i].endMs) {
+    if (swTimers[i].active && !swTimers[i].paused &&
+        (int32_t)(now - swTimers[i].endMs) >= 0) {
       queueAutomationAction(i, swTimers[i].targetState, AUTOMATION_TIMER);
       swTimers[i].active = false;
       swTimers[i].paused = false;
@@ -1522,10 +1542,11 @@ bool validateFutureSchedulesData(const String &data, String &error) {
 }
 
 void checkSchedules() {
+  Preferences localPrefs;
   if (!timeSynced)
     return;
   struct tm ti;
-  if (!getLocalTime(&ti))
+  if (!readCurrentLocalTime(&ti))
     return;
 
   int curMin = ti.tm_hour * 60 + ti.tm_min;
@@ -1537,9 +1558,9 @@ void checkSchedules() {
   String today = dn[ti.tm_wday];
 
   for (int sw = 0; sw < NUM_SWITCHES; sw++) {
-    prefs.begin("sched", true);
-    String sj = prefs.getString(("s" + String(sw)).c_str(), "[]");
-    prefs.end();
+    localPrefs.begin("sched", true);
+    String sj = localPrefs.getString(("s" + String(sw)).c_str(), "[]");
+    localPrefs.end();
 
     {
       JsonDocument sd;
@@ -1573,14 +1594,14 @@ void checkSchedules() {
       sd.clear();
     }
 
-    prefs.begin("fsched", false);
-    String fj = prefs.getString(("f" + String(sw)).c_str(), "[]");
+    localPrefs.begin("fsched", false);
+    String fj = localPrefs.getString(("f" + String(sw)).c_str(), "[]");
 
     {
       JsonDocument fd;
       if (deserializeJson(fd, fj)) {
         fd.clear();
-        prefs.end();
+        localPrefs.end();
         continue;
       }
 
@@ -1620,23 +1641,24 @@ void checkSchedules() {
       if (mod) {
         String nj;
         serializeJson(fd, nj);
-        prefs.putString(("f" + String(sw)).c_str(), nj);
+        localPrefs.putString(("f" + String(sw)).c_str(), nj);
         notifyStorage();
       }
       fd.clear();
     }
-    prefs.end();
+    localPrefs.end();
   }
 }
 
 void checkRestartSchedule() {
+  Preferences localPrefs;
   if (!restartScheduleEnabled || restartScheduleMinute < 0 || restartScheduleMinute > 1439 || restartScheduleDayMask == 0)
     return;
   if (!timeSynced)
     return;
 
   struct tm ti;
-  if (!getLocalTime(&ti))
+  if (!readCurrentLocalTime(&ti))
     return;
   if (ti.tm_wday < 0 || ti.tm_wday > 6)
     return;
@@ -1659,9 +1681,9 @@ void checkRestartSchedule() {
 
   lastRestartScheduleStamp = stamp;
   restartScheduleLastRunKey = currentSlotKey;
-  prefs.begin("admin", false);
-  prefs.putString("rsLast", restartScheduleLastRunKey);
-  prefs.end();
+  localPrefs.begin("admin", false);
+  localPrefs.putString("rsLast", restartScheduleLastRunKey);
+  localPrefs.end();
   restartFlag = true;
   restartAt = millis() + 500;
 }
@@ -1677,11 +1699,12 @@ void checkSensors() {
   float cHum = currentHumid;
 
   for (int sw = 0; sw < NUM_SWITCHES; sw++) {
-    prefs.begin("sensor", true);
-    String tj = prefs.getString(("t" + String(sw)).c_str(), "");
-    String hj = prefs.getString(("h" + String(sw)).c_str(), "");
-    String sj = prefs.getString(("x" + String(sw)).c_str(), "");
-    prefs.end();
+    Preferences localPrefs;
+    localPrefs.begin("sensor", true);
+    String tj = localPrefs.getString(("t" + String(sw)).c_str(), "");
+    String hj = localPrefs.getString(("h" + String(sw)).c_str(), "");
+    String sj = localPrefs.getString(("x" + String(sw)).c_str(), "");
+    localPrefs.end();
 
     if (ahtOk && !tj.isEmpty()) {
       JsonDocument d;
@@ -1693,7 +1716,7 @@ void checkSensors() {
         else if (c == "above")
           act = cTemp > d["value"].as<float>();
         else if (c == "equal")
-          act = abs(cTemp - d["value"].as<float>()) < 0.5;
+          act = abs(cTemp - d["value"].as<float>()) < 0.5f;
         else if (c == "between")
           act = cTemp >= d["min"].as<float>() && cTemp <= d["max"].as<float>();
         if (act)
@@ -1710,7 +1733,7 @@ void checkSensors() {
         else if (c == "above")
           act = cHum > d["value"].as<float>();
         else if (c == "equal")
-          act = abs(cHum - d["value"].as<float>()) < 0.5;
+          act = abs(cHum - d["value"].as<float>()) < 0.5f;
         else if (c == "between")
           act = cHum >= d["min"].as<float>() && cHum <= d["max"].as<float>();
         if (act)
@@ -1721,23 +1744,25 @@ void checkSensors() {
       JsonDocument d;
       if (!deserializeJson(d, sj) && d["enabled"].as<bool>()) {
         struct tm ti;
-        if (getLocalTime(&ti)) {
+        if (readCurrentLocalTime(&ti)) {
           int now = ti.tm_hour * 60 + ti.tm_min;
-          int off = d["offset"].as<int>();
+          int off = d["offsetMinutes"].is<int>() ? d["offsetMinutes"].as<int>() : d["offset"].as<int>();
+          int ssTarget = ((ssMin + off) % 1440 + 1440) % 1440;
+          int srTarget = ((srMin + off) % 1440 + 1440) % 1440;
           String c = d["condition"].as<String>();
           bool act = false;
           if (c == "after_sunset")
-            act = now >= ssMin + off;
+            act = now >= ssTarget;
           else if (c == "before_sunset")
-            act = now <= ssMin + off;
+            act = now <= ssTarget;
           else if (c == "after_sunrise")
-            act = now >= srMin + off;
+            act = now >= srTarget;
           else if (c == "before_sunrise")
-            act = now <= srMin + off;
+            act = now <= srTarget;
           else if (c == "between_sunset_sunrise")
-            act = now >= ssMin + off || now <= srMin + off;
+            act = now >= ssTarget || now <= srTarget;
           else if (c == "between_sunrise_sunset")
-            act = now >= srMin + off && now <= ssMin + off;
+            act = now >= srTarget && now <= ssTarget;
           if (act)
             queueAutomationAction(sw, d["action"].as<String>() == "on", AUTOMATION_SUN);
         }
@@ -1751,14 +1776,16 @@ bool connectToSavedWiFi() {
   String savedPass;
   Serial.println("\n[WIFI] Connecting...");
 
+  // Only auto-start the blocking Config Portal if NO Wi-Fi is saved yet
   if (!getSavedWifiCredentials(savedSsid, savedPass)) {
     Serial.println("[WIFI] No saved WiFi found! Starting Config Portal.");
     return runWifiConfigPortal();
   }
 
   applyStationIpConfig();
+  WiFi.setAutoReconnect(true);
   WiFi.disconnect(false, false);
-  delay(200);
+  delay(100);
   WiFi.begin(savedSsid.c_str(), savedPass.c_str());
 
   int attempts = 0;
@@ -1768,29 +1795,32 @@ bool connectToSavedWiFi() {
       Serial.printf("SSID: %s\n", WiFi.SSID().c_str());
       Serial.printf("IP:   %s\n", WiFi.localIP().toString().c_str());
       WiFi.setSleep(false);
-      delay(2000);
       return true;
     }
-    delay(WIFI_CONNECT_RETRY_MS);
+    delay(500);
     attempts++;
   }
-  Serial.println("[WIFI] Connection failed. Starting Config Portal.");
-  return runWifiConfigPortal();
+
+  Serial.println("[WIFI] Router not ready yet — will auto-reconnect silently in background.");
+  return false;
 }
 
 void checkPhysicalSwitches() {
+  unsigned long now = millis();
   for (int i = 0; i < NUM_SWITCHES; i++) {
     bool reading = digitalRead(inPin[i]);
-    if (reading != lastInState[i])
-      lastDbMs[i] = millis();
-    if ((millis() - lastDbMs[i]) > DB_DELAY && reading != lastInState[i]) {
+    if (reading != rawInState[i]) {
+      rawInState[i] = reading;
+      lastDbMs[i] = now;
+    }
+    if ((now - lastDbMs[i]) >= DB_DELAY && reading != lastInState[i]) {
       lastInState[i] = reading;
+      // For push-buttons: triggers on press (LOW).
+      // For latching wall rocker switches: remove 'if (reading == LOW)' so both flips toggle!
       if (reading == LOW) {
-        bool currentState = readSwState(i);
-        setRelayState(i, !currentState, "physical");
+        setRelayState(i, !readSwState(i), "physical");
       }
     }
-    lastInState[i] = reading;
   }
 }
 
@@ -1826,6 +1856,17 @@ void sendWebFile(AsyncWebServerRequest *request, const char *path, const char *c
 
 // WEB SERVER: ALL API ENDPOINTS
 void setupWebServer() {
+  static bool routesRegistered = false;
+  if (routesRegistered) {
+    if (!webServerRunning) {
+      server.begin();
+      webServerRunning = true;
+      Serial.println("[SERVER] Web server restarted");
+    }
+    return;
+  }
+  routesRegistered = true;
+
   // CORS AND MEMORY CLOSE HEADERS
   DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
   DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -1856,6 +1897,70 @@ void setupWebServer() {
       d["temp"] = currentTemp;
       d["humid"] = currentHumid;
     }
+
+    AsyncResponseStream *response = req->beginResponseStream("application/json");
+    serializeJson(d, *response);
+    req->send(response);
+  });
+
+  server.on("/api/dashboard", HTTP_GET, [](AsyncWebServerRequest *req) {
+    JsonDocument d;
+    d["timeSynced"] = timeSynced;
+    d["ahtOk"] = ahtOk;
+    d["showTemp"] = showTemp;
+    d["showHumid"] = showHumid;
+    d["tempPrec"] = tempPrecision;
+    d["humidPrec"] = humidPrecision;
+    if (ahtOk) {
+      d["temp"] = currentTemp;
+      d["humid"] = currentHumid;
+    }
+
+    JsonArray na = d["names"].to<JsonArray>();
+    JsonArray ic = d["icons"].to<JsonArray>();
+    JsonArray st = d["states"].to<JsonArray>();
+    JsonArray fTimer = d["hasTimer"].to<JsonArray>();
+    JsonArray fSched = d["hasSched"].to<JsonArray>();
+    JsonArray fFuture = d["hasFuture"].to<JsonArray>();
+    JsonArray fSensor = d["hasSensor"].to<JsonArray>();
+
+    Preferences pSched, pFuture, pSensor;
+    pSched.begin("sched", true);
+    pFuture.begin("fsched", true);
+    pSensor.begin("sensor", true);
+
+    auto hasEnabledEntry = [](const String &raw) {
+      JsonDocument doc;
+      if (deserializeJson(doc, raw) || !doc.is<JsonArray>())
+        return false;
+      for (JsonObject o : doc.as<JsonArray>()) {
+        if (o["enabled"].as<bool>())
+          return true;
+      }
+      return false;
+    };
+    auto isSensorOn = [](const String &raw) {
+      if (raw.isEmpty())
+        return false;
+      JsonDocument doc;
+      return !deserializeJson(doc, raw) && doc["enabled"].as<bool>();
+    };
+
+    for (int i = 0; i < NUM_SWITCHES; i++) {
+      na.add(swName[i]);
+      ic.add(swIcon[i]);
+      st.add(readSwState(i));
+      fTimer.add(swTimers[i].active);
+      fSched.add(hasEnabledEntry(pSched.getString(("s" + String(i)).c_str(), "[]")));
+      fFuture.add(hasEnabledEntry(pFuture.getString(("f" + String(i)).c_str(), "[]")));
+      bool sens = isSensorOn(pSensor.getString(("t" + String(i)).c_str(), "")) ||
+                  isSensorOn(pSensor.getString(("h" + String(i)).c_str(), "")) ||
+                  isSensorOn(pSensor.getString(("x" + String(i)).c_str(), ""));
+      fSensor.add(sens);
+    }
+    pSched.end();
+    pFuture.end();
+    pSensor.end();
 
     AsyncResponseStream *response = req->beginResponseStream("application/json");
     serializeJson(d, *response);
@@ -2026,19 +2131,15 @@ void setupWebServer() {
           continue;
 
         unsigned long remainingMs = 0;
-        if (swTimers[i].paused)
+        if (swTimers[i].paused) {
           remainingMs = swTimers[i].remainingMs;
-        else {
-          remainingMs = swTimers[i].endMs > nowMs ? swTimers[i].endMs - nowMs : 0;
-          swTimers[i].remainingMs = remainingMs;
+        } else {
+          int32_t diff = (int32_t)(swTimers[i].endMs - nowMs);
+          remainingMs = diff > 0 ? (unsigned long)diff : 0;
         }
 
         if (remainingMs == 0) {
-          swTimers[i].active = false;
-          swTimers[i].paused = false;
-          swTimers[i].endMs = 0;
-          swTimers[i].remainingMs = 0;
-          continue;
+          continue; // Do NOT set active = false here; let checkTimers() switch the relay!
         }
 
         JsonObject timer = timers.createNestedObject();
@@ -2071,16 +2172,12 @@ void setupWebServer() {
 
       if (!swTimers[sw].paused) {
         unsigned long nowMs = millis();
-        unsigned long remainingMs = swTimers[sw].endMs > nowMs ? swTimers[sw].endMs - nowMs : 0;
-        if (remainingMs == 0) {
-          swTimers[sw].active = false;
-          swTimers[sw].paused = false;
-          swTimers[sw].endMs = 0;
-          swTimers[sw].remainingMs = 0;
+        int32_t diff = (int32_t)(swTimers[sw].endMs - nowMs);
+        if (diff <= 0) {
           req->send(200, "application/json", "{\"ok\":true,\"active\":false,\"paused\":false,\"remainingSec\":0}");
           return;
         }
-        swTimers[sw].remainingMs = remainingMs;
+        swTimers[sw].remainingMs = (unsigned long)diff;
         swTimers[sw].paused = true;
       }
 
@@ -2894,6 +2991,8 @@ void setupWebServer() {
       prefs.putString("tz", tzStr);
       prefs.end();
       notifyStorage();
+      ntpResyncPending = true;
+      lastCheckedMinute = -1;
       req->send(200, "application/json", "{\"ok\":true}");
     });
 
@@ -3273,31 +3372,35 @@ void setupWebServer() {
   });
 
   server.begin();
+  webServerRunning = true;
   Serial.println("[SERVER] Web server started");
 }
 
 void setup() {
   std::set_new_handler(oomNewHandler);
-  Serial.begin(115200);
-  Serial.println("\n==============================");
-  Serial.println("  ESP32 Smart Home Starting");
-  Serial.println("==============================");
+  swStateMutex = xSemaphoreCreateMutex();
+
+  // 1. Restore relays FIRST so pins never drop out during boot delays
+  loadSwitchSettings();
 
   for (int i = 0; i < NUM_SWITCHES; i++) {
-    pinMode(outPin[i], OUTPUT);
     pinMode(inPin[i], INPUT);
     lastInState[i] = digitalRead(inPin[i]);
+    rawInState[i] = lastInState[i];
   }
   pinMode(LED_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(BOOT_BUTTON, INPUT_PULLUP);
 
-  swStateMutex = xSemaphoreCreateMutex();
+  Serial.begin(115200);
+  Serial.println("\n==============================");
+  Serial.println("  ESP32 Smart Home Starting");
+  Serial.println("==============================");
 
   digitalWrite(BUZZER_PIN, HIGH);
   delay(100);
   digitalWrite(BUZZER_PIN, LOW);
-  delay(2000);
+  delay(1500);
 
   if (digitalRead(BOOT_BUTTON) == LOW) {
     digitalWrite(BUZZER_PIN, HIGH);
@@ -3310,15 +3413,11 @@ void setup() {
     runWifiConfigPortal(true);
   }
 
-  EEPROM.begin(512);
-  Serial.println("[OK] EEPROM Initialized");
-  delay(1000);
   if (!SPIFFS.begin(true))
     Serial.println("[ERROR] SPIFFS Mount Failed!");
   else
     Serial.println("[OK] SPIFFS Mounted Successfully");
 
-  loadSwitchSettings();
   loadWifiSettings();
   loadAdminSettings();
   initDefaultUser();
@@ -3328,38 +3427,32 @@ void setup() {
   if (aht.begin()) {
     ahtOk = true;
     Serial.println("[OK] AHT10 sensor detected");
-  } else
+  } else {
     Serial.println("[WARN] AHT10 not detected");
+  }
 
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-    switch (event) {
-    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-      Serial.println("[WIFI] Disconnected! ESP32 will auto-reconnect...");
-      WiFi.reconnect();
-      break;
-    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+    if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
       pendingWebServerRestart = true;
-      break;
-    default:
-      break;
     }
   });
+
+  // Connect (or run portal) FIRST so Wi-Fi/lwIP is initialized and port 80 is free for WiFiManager
   connectToSavedWiFi();
-  delay(1000);
+  setupWebServer();
+  lastWifiRetryMs = millis();
 
   if (WiFi.status() == WL_CONNECTED) {
     WiFi.setSleep(false);
     syncTime();
-    setupWebServer();
     if (MDNS.begin(mdnsName.c_str())) {
       MDNS.addService("http", "tcp", 80);
       Serial.println("[MDNS] Started: http://" + mdnsName + ".local");
     }
+    pendingWebServerRestart = false;
   }
 
   calcSunriseSunset();
-
-  pendingWebServerRestart = false;
 
   Serial.println("==============================");
   Serial.println("System Ready");
@@ -3372,18 +3465,46 @@ void loop() {
   for (int i = 0; i < NUM_SWITCHES; i++) {
     if (nvsRelayDirty[i]) {
       nvsRelayDirty[i] = false;
-      prefs.begin("sw", false);
-      prefs.putBool(("l" + String(i)).c_str(), readSwState(i));
-      prefs.end();
+      Preferences localPrefs;
+      localPrefs.begin("sw", false);
+      localPrefs.putBool(("l" + String(i)).c_str(), readSwState(i));
+      localPrefs.end();
     }
   }
 
+  // Silently refresh Wi-Fi sleep, web server, mDNS, and NTP whenever IP is obtained
   if (pendingWebServerRestart) {
     pendingWebServerRestart = false;
-    server.end();
-    delay(100);
-    setupWebServer();
+    WiFi.setSleep(false);
+    setupWebServer(); // Safe: never duplicates routes or kills active sockets
+    MDNS.end();
+    if (MDNS.begin(mdnsName.c_str())) {
+      MDNS.addService("http", "tcp", 80);
+    }
     syncTime();
+  }
+
+  if (ntpResyncPending) {
+    ntpResyncPending = false;
+    syncTime();
+    sunCalcPending = true;
+  }
+
+  if (sunCalcPending) {
+    sunCalcPending = false;
+    calcSunriseSunset();
+  }
+
+  // Silent non-blocking Wi-Fi reconnect every 20s if router was off or dropped
+  if (!portalFlag && !forgetWifiFlag && !factoryResetWifiClearPending &&
+      WiFi.status() != WL_CONNECTED && (millis() - lastWifiRetryMs >= 20000UL)) {
+    lastWifiRetryMs = millis();
+    String ssid, pass;
+    if (getSavedWifiCredentials(ssid, pass)) {
+      applyStationIpConfig();
+      WiFi.disconnect(false, false);
+      WiFi.begin(ssid.c_str(), pass.c_str());
+    }
   }
 
   serviceNotifyStorage();
@@ -3393,14 +3514,14 @@ void loop() {
   checkTimers();
 
   unsigned long now = millis();
-  if (now - lastSchedCheck >= 15000) {
+  if (now - lastSchedCheck >= 15000UL) {
     lastSchedCheck = now;
     checkSchedules();
     calcSunriseSunset();
     checkRestartSchedule();
   }
 
-  if (now - lastSensorCheck >= 30000) {
+  if (now - lastSensorCheck >= 30000UL) {
     lastSensorCheck = now;
     checkSensors();
   }
@@ -3410,19 +3531,20 @@ void loop() {
   if (portalFlag) {
     portalFlag = false;
     server.end();
+    webServerRunning = false;
     if (!runWifiConfigPortal(true)) {
       restartFlag = true;
       restartAt = millis() + WIFI_PORTAL_RECOVERY_RESTART_MS;
     }
   }
 
-  if (forgetWifiFlag && millis() >= forgetWifiAt) {
+  if (forgetWifiFlag && (int32_t)(millis() - forgetWifiAt) >= 0) {
     forgetWifiFlag = false;
     WiFi.disconnect(true, true);
     ESP.restart();
   }
 
-  if (factoryResetWifiClearPending && millis() >= factoryResetWifiClearAt) {
+  if (factoryResetWifiClearPending && (int32_t)(millis() - factoryResetWifiClearAt) >= 0) {
     factoryResetWifiClearPending = false;
     clearWifiCredentialsOnly();
     WiFi.disconnect(true, true);
@@ -3433,6 +3555,6 @@ void loop() {
     restartAt = millis() + 1500;
   }
 
-  if (restartFlag && millis() >= restartAt)
+  if (restartFlag && (int32_t)(millis() - restartAt) >= 0)
     ESP.restart();
 }

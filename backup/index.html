@@ -1170,25 +1170,6 @@
         document.getElementById("datetime").textContent = baseStr;
       }
 
-      function loadEnvStatus() {
-        fetch("/api/status", { cache: "no-store" })
-          .then(function (r) {
-            return r.json();
-          })
-          .then(function (d) {
-            if (d) {
-              envData.showTemp = !!d.showTemp;
-              envData.showHumid = !!d.showHumid;
-              envData.tempPrec = d.tempPrec || 0;
-              envData.humidPrec = d.humidPrec || 0;
-              // Will be null if AHT10 is disconnected (backend doesn't send it)
-              envData.temp = d.temp !== undefined ? d.temp : null;
-              envData.humid = d.humid !== undefined ? d.humid : null;
-            }
-          })
-          .catch(function () {});
-      }
-
       function normalizeIconName(iconName) {
         var aliases = {
           monitor: "tv",
@@ -1263,18 +1244,45 @@
         return iconSvgMap[normalizeIconName(iconName)] || iconSvgMap.home;
       }
 
-      /* ── Load Switch Data from ESP32 ── */
-      function loadSwitches() {
-        fetch("/api/switches")
+      /* ── Unified Fast Dashboard Loader (1 request instead of 26) ── */
+      function setFeatureIconState(cardIndex, featureKey, active) {
+        var card = cards[cardIndex];
+        if (!card) return;
+        var icon = card.querySelector(
+          '.feat-icon[data-feature="' + featureKey + '"]',
+        );
+        if (!icon) return;
+        icon.classList.toggle("active", !!active);
+      }
+
+      /* ── Unified Fast Dashboard Loader (1 request instead of 26) ── */
+      var dashboardBusy = false;
+
+      function loadDashboard() {
+        if (dashboardBusy) return Promise.resolve();
+        dashboardBusy = true;
+
+        return fetch("/api/dashboard", { cache: "no-store" })
           .then(function (r) {
-            return r.json();
+            return r.ok ? r.json() : null;
           })
           .then(function (data) {
+            if (!data) return;
+
+            envData.showTemp = !!data.showTemp;
+            envData.showHumid = !!data.showHumid;
+            envData.tempPrec = data.tempPrec || 0;
+            envData.humidPrec = data.humidPrec || 0;
+            envData.temp = data.temp !== undefined ? data.temp : null;
+            envData.humid = data.humid !== undefined ? data.humid : null;
+            updateClock();
+
             cards.forEach(function (card, i) {
               var iconEl = card.querySelector(".card-icon");
               var nameEl = card.querySelector(".card-name");
               var statusEl = card.querySelector(".card-status");
               var toggle = card.querySelector(".toggle input");
+
               if (data.names && data.names[i])
                 nameEl.textContent = data.names[i];
               if (iconEl && data.icons && data.icons[i]) {
@@ -1289,183 +1297,43 @@
                 card.classList.remove("on");
                 statusEl.textContent = "Off";
               }
-            });
-          })
-          .catch(function (err) {
-            console.log("Switch load error:", err);
-          });
-      }
 
-      function hasSavedSensorAutomation(record) {
-        if (!record || typeof record !== "object" || Array.isArray(record)) {
-          return false;
-        }
-        return [
-          "condition",
-          "action",
-          "value",
-          "min",
-          "max",
-          "offset",
-          "offsetMinutes",
-          "enabled",
-        ].some(function (key) {
-          return (
-            record[key] !== undefined &&
-            record[key] !== null &&
-            record[key] !== ""
-          );
-        });
-      }
-
-      function setFeatureIconState(cardIndex, featureKey, active) {
-        var card = cards[cardIndex];
-        if (!card) return;
-        var icon = card.querySelector(
-          '.feat-icon[data-feature="' + featureKey + '"]',
-        );
-        if (!icon) return;
-        icon.classList.toggle("active", !!active);
-      }
-
-      var automationIndicatorsBusy = false;
-
-      function loadAutomationFeatureIndicators() {
-        if (automationIndicatorsBusy) {
-          return Promise.resolve();
-        }
-        automationIndicatorsBusy = true;
-
-        var sensorTypes = ["temp", "humid", "sun"];
-        var timersBySwitch = [];
-        var schedulesBySwitch = [];
-        var futureBySwitch = [];
-        var sensorEntries = [];
-        var jobs = [];
-
-        for (var sw = 0; sw < cards.length; sw++) {
-          (function (switchIndex) {
-            jobs.push(function () {
-              return fetch("/api/timers?sw=" + switchIndex, {
-                cache: "no-store",
-              })
-                .then(function (r) {
-                  return r.ok ? r.json() : [];
-                })
-                .catch(function () {
-                  return [];
-                })
-                .then(function (data) {
-                  timersBySwitch[switchIndex] = data;
-                });
-            });
-
-            jobs.push(function () {
-              return fetch("/api/schedules?sw=" + switchIndex, {
-                cache: "no-store",
-              })
-                .then(function (r) {
-                  return r.ok ? r.json() : [];
-                })
-                .catch(function () {
-                  return [];
-                })
-                .then(function (data) {
-                  schedulesBySwitch[switchIndex] = data;
-                });
-            });
-
-            jobs.push(function () {
-              return fetch("/api/fschedules?sw=" + switchIndex, {
-                cache: "no-store",
-              })
-                .then(function (r) {
-                  return r.ok ? r.json() : [];
-                })
-                .catch(function () {
-                  return [];
-                })
-                .then(function (data) {
-                  futureBySwitch[switchIndex] = data;
-                });
-            });
-
-            sensorTypes.forEach(function (sensorType) {
-              jobs.push(function () {
-                return fetch(
-                  "/api/sensor/" + sensorType + "?sw=" + switchIndex,
-                  { cache: "no-store" },
-                )
-                  .then(function (r) {
-                    return r.ok ? r.json() : {};
-                  })
-                  .catch(function () {
-                    return {};
-                  })
-                  .then(function (data) {
-                    sensorEntries.push({ sw: switchIndex, data: data || {} });
-                  });
-              });
-            });
-          })(sw);
-        }
-
-        /* Run one request at a time to avoid overwhelming the ESP32's
-           web server with many concurrent connections. */
-        return jobs
-          .reduce(function (chain, job) {
-            return chain.then(job);
-          }, Promise.resolve())
-          .then(function () {
-            var sensorActiveBySwitch = [];
-
-            for (var i = 0; i < cards.length; i++) {
-              sensorActiveBySwitch.push(false);
-            }
-
-            sensorEntries.forEach(function (entry) {
-              var switchIndex = parseInt(entry.sw, 10);
-              if (
-                switchIndex >= 0 &&
-                switchIndex < cards.length &&
-                hasSavedSensorAutomation(entry.data)
-              ) {
-                sensorActiveBySwitch[switchIndex] = true;
-              }
-            });
-
-            for (var swIndex = 0; swIndex < cards.length; swIndex++) {
               setFeatureIconState(
-                swIndex,
+                i,
                 "timer",
-                Array.isArray(timersBySwitch[swIndex]) &&
-                  timersBySwitch[swIndex].length > 0,
+                data.hasTimer && data.hasTimer[i],
               );
               setFeatureIconState(
-                swIndex,
+                i,
                 "schedule",
-                Array.isArray(schedulesBySwitch[swIndex]) &&
-                  schedulesBySwitch[swIndex].length > 0,
+                data.hasSched && data.hasSched[i],
               );
               setFeatureIconState(
-                swIndex,
+                i,
                 "future",
-                Array.isArray(futureBySwitch[swIndex]) &&
-                  futureBySwitch[swIndex].length > 0,
+                data.hasFuture && data.hasFuture[i],
               );
               setFeatureIconState(
-                swIndex,
+                i,
                 "sensor",
-                !!sensorActiveBySwitch[swIndex],
+                data.hasSensor && data.hasSensor[i],
               );
-            }
+            });
           })
           .catch(function (err) {
-            console.log("Automation indicator load error:", err);
+            console.log("Dashboard load error:", err);
           })
           .then(function () {
-            automationIndicatorsBusy = false;
+            dashboardBusy = false;
           });
+      }
+
+      // Compatibility wrappers so existing login/init calls work automatically
+      function loadSwitches() {
+        return loadDashboard();
+      }
+      function loadAutomationFeatureIndicators() {
+        return Promise.resolve();
       }
 
       /* ── Toggle Switch via API ── */
@@ -1681,7 +1549,6 @@
 
           setTimeout(function () {
             loadSwitches();
-            loadEnvStatus();
           }, 250);
 
           setTimeout(function () {
@@ -1691,23 +1558,14 @@
         document.body.classList.remove("app-init");
       }
 
-      /* ── Periodic switch state refresh ── */
+      /* ── Periodic dashboard refresh ── */
       setInterval(function () {
         if (
           !document.getElementById("dashboard").classList.contains("hidden")
         ) {
-          loadSwitches();
-          loadEnvStatus();
+          loadDashboard();
         }
-      }, 5000);
-
-      setInterval(function () {
-        if (
-          !document.getElementById("dashboard").classList.contains("hidden")
-        ) {
-          loadAutomationFeatureIndicators();
-        }
-      }, 7000); // Increased from 5000 to 7000 to separate API traffic
+      }, 3000);
 
       /* ── Initialize ── */
       initSession();
