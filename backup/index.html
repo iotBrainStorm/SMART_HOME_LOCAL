@@ -38,7 +38,18 @@
       .login-overlay {
         position: fixed;
         inset: 0;
-        background: #121212;
+        background:
+          radial-gradient(
+            circle at 50% -10%,
+            rgba(37, 99, 235, 0.22),
+            transparent 55%
+          ),
+          radial-gradient(
+            circle at 85% 95%,
+            rgba(56, 189, 248, 0.1),
+            transparent 45%
+          ),
+          #0b0e14;
         z-index: 1000;
         display: flex;
         align-items: center;
@@ -50,31 +61,99 @@
         display: none;
       }
 
+      @keyframes loginBoxReveal {
+        from {
+          opacity: 0;
+          transform: translateY(14px) scale(0.98);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
+
       .login-box {
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 24px;
-        padding: 40px 32px;
+        position: relative;
+        overflow: hidden;
+        background: linear-gradient(
+          165deg,
+          rgba(30, 41, 59, 0.62) 0%,
+          rgba(15, 23, 42, 0.88) 100%
+        );
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 26px;
+        padding: 38px 32px 32px;
         width: 100%;
-        max-width: 380px;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        max-width: 390px;
+        box-shadow:
+          0 24px 60px rgba(0, 0, 0, 0.65),
+          inset 0 1px 0 rgba(255, 255, 255, 0.14);
+        animation: loginBoxReveal 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      .login-box::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 15%;
+        right: 15%;
+        height: 2px;
+        background: linear-gradient(
+          90deg,
+          transparent,
+          #60a5fa,
+          #38bdf8,
+          transparent
+        );
+        opacity: 0.75;
+      }
+
+      .login-lock {
+        width: 60px;
+        height: 60px;
+        margin: 0 auto 18px;
+        border-radius: 18px;
+        background: linear-gradient(
+          135deg,
+          rgba(37, 99, 235, 0.25),
+          rgba(56, 189, 248, 0.08)
+        );
+        border: 1px solid rgba(96, 165, 250, 0.32);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow:
+          0 8px 24px rgba(37, 99, 235, 0.25),
+          inset 0 1px 0 rgba(255, 255, 255, 0.15);
+      }
+
+      .login-lock svg {
+        width: 28px;
+        height: 28px;
+        stroke: #60a5fa;
+        fill: none;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
       }
 
       .login-box h2 {
         text-align: center;
-        color: #e2e8f0;
-        font-size: 1.3rem;
+        color: #f8fafc;
+        font-size: 1.35rem;
         font-weight: 700;
-        letter-spacing: 3px;
+        letter-spacing: 2.5px;
         text-transform: uppercase;
-        margin-bottom: 8px;
+        margin-bottom: 6px;
       }
 
       .login-box .login-sub {
         text-align: center;
-        color: #64748b;
+        color: #94a3b8;
         font-size: 0.82rem;
-        margin-bottom: 28px;
+        margin-bottom: 26px;
       }
 
       .login-field {
@@ -83,32 +162,107 @@
 
       .login-field label {
         display: block;
-        font-size: 0.78rem;
+        font-size: 0.74rem;
         font-weight: 600;
         color: #94a3b8;
-        margin-bottom: 6px;
-        letter-spacing: 0.5px;
+        margin-bottom: 7px;
+        letter-spacing: 0.8px;
         text-transform: uppercase;
+      }
+
+      .login-input-wrap {
+        position: relative;
+        display: flex;
+        align-items: center;
+      }
+
+      .login-input-icon {
+        position: absolute;
+        left: 14px;
+        width: 18px;
+        height: 18px;
+        stroke: #64748b;
+        fill: none;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        pointer-events: none;
+        transition: stroke 0.2s ease;
       }
 
       .login-field input {
         width: 100%;
-        padding: 12px 16px;
-        border-radius: 12px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        background: rgba(255, 255, 255, 0.06);
-        color: #e2e8f0;
-        font-size: 0.95rem;
+        padding: 13px 44px 13px 42px;
+        border-radius: 13px;
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        background: rgba(15, 23, 42, 0.65);
+        color: #f1f5f9;
+        font-size: 0.92rem;
         outline: none;
-        transition: border-color 0.2s;
+        transition:
+          border-color 0.2s ease,
+          background 0.2s ease,
+          box-shadow 0.2s ease;
       }
 
       .login-field input:focus {
-        border-color: #2563eb;
+        border-color: #3b82f6;
+        background: rgba(15, 23, 42, 0.9);
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+      }
+
+      .login-input-wrap:focus-within .login-input-icon {
+        stroke: #60a5fa;
       }
 
       .login-field input::placeholder {
         color: #475569;
+      }
+
+      .login-eye-btn {
+        position: absolute;
+        right: 10px;
+        width: 32px;
+        height: 32px;
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: #64748b;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition:
+          color 0.15s ease,
+          background 0.15s ease;
+      }
+
+      .login-eye-btn:hover {
+        color: #e2e8f0;
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .login-eye-btn.active {
+        color: #60a5fa;
+      }
+
+      .login-eye-btn svg {
+        width: 18px;
+        height: 18px;
+        stroke: currentColor;
+        fill: none;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .login-eye-btn .eye-slash {
+        opacity: 0;
+        transition: opacity 0.15s ease;
+      }
+
+      .login-eye-btn.active .eye-slash {
+        opacity: 1;
       }
 
       .remember-field {
@@ -117,7 +271,11 @@
         justify-content: space-between;
         gap: 10px;
         flex-wrap: wrap;
-        margin-bottom: 18px;
+        margin: 6px 0 22px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.05);
       }
 
       .remember-option {
@@ -131,53 +289,73 @@
         height: 16px;
         accent-color: #2563eb;
         cursor: pointer;
+        border-radius: 4px;
       }
 
       .remember-option label {
-        font-size: 0.82rem;
+        font-size: 0.8rem;
+        font-weight: 500;
         color: #94a3b8;
         cursor: pointer;
+        user-select: none;
+        transition: color 0.15s ease;
+      }
+
+      .remember-option:hover label {
+        color: #e2e8f0;
       }
 
       .login-btn {
         width: 100%;
         padding: 14px;
         border-radius: 14px;
-        border: none;
-        background: #2563eb;
+        border: 1px solid rgba(96, 165, 250, 0.35);
+        background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
         color: #fff;
-        font-size: 0.95rem;
+        font-size: 0.92rem;
         font-weight: 700;
-        letter-spacing: 1px;
+        letter-spacing: 1.2px;
         cursor: pointer;
-        margin-top: 8px;
-        box-shadow: 0 4px 14px rgba(37, 99, 235, 0.3);
-        transition: background 0.2s;
+        box-shadow:
+          0 8px 20px rgba(37, 99, 235, 0.35),
+          inset 0 1px 0 rgba(255, 255, 255, 0.25);
+        transition:
+          transform 0.15s ease,
+          box-shadow 0.2s ease,
+          filter 0.2s ease;
       }
 
-      .login-btn:active {
-        background: #1d4ed8;
+      .login-btn:hover:not(:disabled) {
+        filter: brightness(1.08);
+        box-shadow:
+          0 10px 24px rgba(37, 99, 235, 0.45),
+          inset 0 1px 0 rgba(255, 255, 255, 0.3);
+      }
+
+      .login-btn:active:not(:disabled) {
+        transform: scale(0.985);
+      }
+
+      .login-btn:disabled {
+        opacity: 0.65;
+        cursor: not-allowed;
       }
 
       .login-error {
         text-align: center;
         color: #f87171;
-        font-size: 0.82rem;
+        font-size: 0.8rem;
+        font-weight: 500;
         margin-top: 14px;
         min-height: 20px;
+        line-height: 1.4;
       }
 
-      .login-lock {
-        text-align: center;
-        margin-bottom: 20px;
-      }
-
-      .login-lock svg {
-        width: 48px;
-        height: 48px;
-        stroke: #2563eb;
-        fill: none;
-        stroke-width: 1.5;
+      .login-error:not(:empty) {
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
       }
 
       /* ── Main Page ── */
@@ -680,27 +858,56 @@
           </svg>
         </div>
         <h2>Smart Home</h2>
-        <div class="login-sub">Enter credentials to continue</div>
+        <div class="login-sub">Sign in to access your control panel</div>
+
         <div class="login-field">
-          <label>User ID</label>
-          <input
-            type="text"
-            id="loginUser"
-            name="username"
-            placeholder="Enter user ID"
-            autocomplete="username"
-          />
+          <label for="loginUser">User ID</label>
+          <div class="login-input-wrap">
+            <svg class="login-input-icon" viewBox="0 0 24 24">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+            </svg>
+            <input
+              type="text"
+              id="loginUser"
+              name="username"
+              placeholder="Enter user ID"
+              autocomplete="username"
+            />
+          </div>
         </div>
+
         <div class="login-field">
-          <label>Password</label>
-          <input
-            type="password"
-            id="loginPass"
-            name="password"
-            placeholder="Enter password"
-            autocomplete="current-password"
-          />
+          <label for="loginPass">Password</label>
+          <div class="login-input-wrap">
+            <svg class="login-input-icon" viewBox="0 0 24 24">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+            </svg>
+            <input
+              type="password"
+              id="loginPass"
+              name="password"
+              placeholder="Enter password"
+              autocomplete="current-password"
+            />
+            <button
+              type="button"
+              class="login-eye-btn"
+              id="loginPassToggle"
+              onclick="toggleLoginPassword()"
+              aria-label="Show password"
+              title="Show/Hide Password"
+            >
+              <svg viewBox="0 0 24 24">
+                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z" />
+                <circle cx="12" cy="12" r="3" />
+                <path class="eye-slash" d="M4 4l16 16" />
+              </svg>
+            </button>
+          </div>
         </div>
+
         <div class="remember-field">
           <div class="remember-option">
             <input type="checkbox" id="rememberMe" />
@@ -711,6 +918,7 @@
             <label for="resetAdmin">Reset admin</label>
           </div>
         </div>
+
         <button class="login-btn" id="loginBtn">SIGN IN</button>
         <div class="login-error" id="loginError"></div>
       </div>
@@ -1492,6 +1700,15 @@
             loginBtn.textContent = "SIGN IN";
             loginError.textContent = "Connection failed";
           });
+      }
+
+      function toggleLoginPassword() {
+        var passInput = document.getElementById("loginPass");
+        var toggleBtn = document.getElementById("loginPassToggle");
+        if (!passInput || !toggleBtn) return;
+        var show = passInput.type === "password";
+        passInput.type = show ? "text" : "password";
+        toggleBtn.classList.toggle("active", show);
       }
 
       function doLogin() {
