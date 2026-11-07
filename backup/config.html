@@ -3094,6 +3094,7 @@
               <li>Clear wifi credentials</li>
               <li>Clear modified admin user & password</li>
               <li>Clear all normal users</li>
+              <li>Restore login & verification validation</li>
             </ul>
           </div>
           <div
@@ -3193,6 +3194,25 @@
               <option value="+11:00">(UTC+11:00) Solomon Islands</option>
               <option value="+12:00">(UTC+12:00) Auckland, Fiji</option>
             </select>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Real-Time Clock Sync</div>
+              <div
+                class="setting-sub"
+                id="lastSyncedDisplay"
+                style="color: #60a5fa; font-family: monospace"
+              >
+                Last synced: Never
+              </div>
+            </div>
+            <button
+              class="cfg-btn cfg-btn-secondary"
+              id="syncTimeBtn"
+              onclick="syncTimeNow()"
+            >
+              Sync
+            </button>
           </div>
           <div style="margin-top: 16px; text-align: right">
             <button
@@ -3368,6 +3388,74 @@
           <div id="locationStatus" style="margin-top: 12px"></div>
         </div>
 
+        <!-- Validation -->
+        <div class="panel" id="panel-admin-validation">
+          <div class="panel-title">Validation</div>
+          <div class="info-box">
+            <strong>Validation Control</strong> — Manage user login and action
+            verification popups. Any registered user can enable or disable these
+            options using user verification.
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">User Login</div>
+              <div class="setting-sub">
+                Require login screen to access dashboard
+              </div>
+            </div>
+            <label class="sm-toggle">
+              <input
+                type="checkbox"
+                id="valLoginEnable"
+                checked
+                onchange="toggleValidationLoginMode()"
+              />
+              <span class="sm-toggle-track"></span>
+            </label>
+          </div>
+
+          <div class="setting-row" id="valLoginModeRow">
+            <div class="setting-info">
+              <div class="setting-label">Login Type</div>
+              <div class="setting-sub">
+                Sessional keeps login active; Every time asks on each page
+                refresh
+              </div>
+            </div>
+            <select
+              class="cfg-input"
+              id="valLoginMode"
+              style="max-width: 240px"
+            >
+              <option value="sessional">Sessional (Default)</option>
+              <option value="everytime">Every time</option>
+            </select>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Verification Popup</div>
+              <div class="setting-sub">
+                Require credential verification for automations and settings
+              </div>
+            </div>
+            <label class="sm-toggle">
+              <input type="checkbox" id="valVerifyEnable" checked />
+              <span class="sm-toggle-track"></span>
+            </label>
+          </div>
+
+          <div style="margin-top: 16px; text-align: right">
+            <button
+              class="cfg-btn cfg-btn-primary"
+              onclick="saveValidationSettings()"
+            >
+              Save Validation
+            </button>
+          </div>
+        </div>
+
         <!-- Performance -->
         <div class="panel" id="panel-admin-performance">
           <div class="panel-title">System Performance</div>
@@ -3424,9 +3512,8 @@
                   color: #64748b;
                 "
               >
-                <span id="perfFreeRam">Free: -- KB</span>
-                <span id="perfMinRam">Min: -- KB</span>
-                <span id="perfMaxBlock">Largest: -- KB</span>
+                <span id="perfRamUsed">Used: -- KB</span>
+                <span id="perfRamTotal">Total: -- KB</span>
               </div>
             </div>
 
@@ -4035,8 +4122,10 @@
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: body,
         }).then(function (r) {
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          return r.json();
+          return r.json().catch(function () {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return {};
+          });
         });
       }
       function apiGet(url) {
@@ -4075,16 +4164,20 @@
               d.uptime,
             );
 
-            document.getElementById("perfFreeRam").textContent =
-              "Free: " + (d.freeHeap / 1024).toFixed(1) + " KB";
-            document.getElementById("perfMinRam").textContent =
-              "Min: " + (d.minHeap / 1024).toFixed(1) + " KB";
-            document.getElementById("perfMaxBlock").textContent =
-              "Largest: " + (d.maxBlock / 1024).toFixed(1) + " KB";
+            var ramTotal = d.ramTotal || d.heapSize || 0;
+            var ramUsed =
+              d.ramUsed !== undefined
+                ? d.ramUsed
+                : Math.max(0, ramTotal - (d.freeHeap || 0));
+
+            document.getElementById("perfRamUsed").textContent =
+              "Used: " + (ramUsed / 1024).toFixed(1) + " KB";
+            document.getElementById("perfRamTotal").textContent =
+              "Total: " + (ramTotal / 1024).toFixed(1) + " KB";
 
             var ramUsagePct = 0;
-            if (d.heapSize > 0) {
-              ramUsagePct = ((d.heapSize - d.freeHeap) / d.heapSize) * 100;
+            if (ramTotal > 0) {
+              ramUsagePct = (ramUsed / ramTotal) * 100;
             }
             document.getElementById("perfRamUsage").textContent =
               ramUsagePct.toFixed(1) + "%";
@@ -4168,6 +4261,7 @@
           { label: "Time Setup", panel: "panel-admin-time" },
           { label: "Temp & Hum", panel: "panel-admin-temphum" },
           { label: "Location Setup", panel: "panel-admin-location" },
+          { label: "Validation", panel: "panel-admin-validation" },
           { label: "Performance", panel: "panel-admin-performance" },
           { label: "Restart", panel: "panel-admin-restart" },
           { label: "Reset Storage", panel: "panel-admin-storage" },
@@ -4277,6 +4371,14 @@
 
         if (panelId === "panel-admin-temphum") {
           loadTempHumSettings();
+        }
+
+        if (panelId === "panel-admin-validation") {
+          loadValidationSettings();
+        }
+
+        if (panelId === "panel-admin-time") {
+          loadTimeSettings();
         }
 
         var sideItems = sidebar.querySelectorAll(".sidebar-item");
@@ -5545,40 +5647,50 @@
             '<div class="schedule-error">' + msg + "</div>";
         } else {
           var sw = document.getElementById("scheduleSwitch").value;
-          apiPost(
-            "/api/schedules",
-            "sw=" +
-              sw +
-              "&data=" +
-              encodeURIComponent(JSON.stringify(schedules)),
-          )
-            .then(function (d) {
-              if (d.ok) {
-                document.getElementById("scheduleContainer").style.display =
-                  "none";
-                clearAllSchedules();
-                validationDiv.innerHTML =
-                  '<div class="schedule-success">' +
-                  slots.length +
-                  " schedule(s) saved successfully!</div>";
-                if (
-                  document
-                    .getElementById("scheduleList")
-                    .classList.contains("active")
-                ) {
-                  loadScheduleList();
-                }
-              } else {
-                validationDiv.innerHTML =
-                  '<div class="schedule-error">' +
-                  (d.error || "Save failed") +
-                  "</div>";
-              }
-            })
-            .catch(function () {
-              validationDiv.innerHTML =
-                '<div class="schedule-error">Connection error</div>';
-            });
+          var slotCount = slots.length;
+          showPasswordModal(
+            "Enter user credentials to save schedule",
+            function (data, user, pass) {
+              apiPost(
+                "/api/schedules",
+                appendAdminCredentials(
+                  "sw=" +
+                    sw +
+                    "&data=" +
+                    encodeURIComponent(JSON.stringify(schedules)),
+                  user,
+                  pass,
+                ),
+              )
+                .then(function (d) {
+                  if (d.ok) {
+                    document.getElementById("scheduleContainer").style.display =
+                      "none";
+                    clearAllSchedules();
+                    validationDiv.innerHTML =
+                      '<div class="schedule-success">' +
+                      slotCount +
+                      " schedule(s) saved successfully!</div>";
+                    if (
+                      document
+                        .getElementById("scheduleList")
+                        .classList.contains("active")
+                    ) {
+                      loadScheduleList();
+                    }
+                  } else {
+                    validationDiv.innerHTML =
+                      '<div class="schedule-error">' +
+                      (d.error || "Save failed") +
+                      "</div>";
+                  }
+                })
+                .catch(function () {
+                  validationDiv.innerHTML =
+                    '<div class="schedule-error">Connection error</div>';
+                });
+            },
+          );
         }
       }
 
@@ -5732,41 +5844,51 @@
             '<div class="schedule-error">' + msg + "</div>";
         } else {
           var sw = document.getElementById("futureScheduleSwitch").value;
-          apiPost(
-            "/api/fschedules",
-            "sw=" +
-              sw +
-              "&data=" +
-              encodeURIComponent(JSON.stringify(schedules)),
-          )
-            .then(function (d) {
-              if (d.ok) {
-                document.getElementById(
-                  "futureScheduleContainer",
-                ).style.display = "none";
-                clearAllFutureSchedules();
-                validationDiv.innerHTML =
-                  '<div class="schedule-success">' +
-                  slots.length +
-                  " future schedule(s) saved successfully!</div>";
-                if (
-                  document
-                    .getElementById("futureScheduleList")
-                    .classList.contains("active")
-                ) {
-                  loadFutureScheduleList();
-                }
-              } else {
-                validationDiv.innerHTML =
-                  '<div class="schedule-error">' +
-                  (d.error || "Save failed") +
-                  "</div>";
-              }
-            })
-            .catch(function () {
-              validationDiv.innerHTML =
-                '<div class="schedule-error">Connection error</div>';
-            });
+          var slotCount = slots.length;
+          showPasswordModal(
+            "Enter user credentials to save future schedule",
+            function (data, user, pass) {
+              apiPost(
+                "/api/fschedules",
+                appendAdminCredentials(
+                  "sw=" +
+                    sw +
+                    "&data=" +
+                    encodeURIComponent(JSON.stringify(schedules)),
+                  user,
+                  pass,
+                ),
+              )
+                .then(function (d) {
+                  if (d.ok) {
+                    document.getElementById(
+                      "futureScheduleContainer",
+                    ).style.display = "none";
+                    clearAllFutureSchedules();
+                    validationDiv.innerHTML =
+                      '<div class="schedule-success">' +
+                      slotCount +
+                      " future schedule(s) saved successfully!</div>";
+                    if (
+                      document
+                        .getElementById("futureScheduleList")
+                        .classList.contains("active")
+                    ) {
+                      loadFutureScheduleList();
+                    }
+                  } else {
+                    validationDiv.innerHTML =
+                      '<div class="schedule-error">' +
+                      (d.error || "Save failed") +
+                      "</div>";
+                  }
+                })
+                .catch(function () {
+                  validationDiv.innerHTML =
+                    '<div class="schedule-error">Connection error</div>';
+                });
+            },
+          );
         }
       }
 
@@ -5867,48 +5989,72 @@
 
       function removeTimer(sw) {
         var switchIndex = parseInt(sw, 10) || 0;
-        apiPost("/api/timer/clear", "sw=" + switchIndex)
-          .then(function (d) {
-            if (d.ok) {
-              alert("Timer removed!");
-              loadTimerList(true);
-            } else {
-              alert(d.error || "Failed to remove timer");
-            }
-          })
-          .catch(function () {
-            alert("Connection error");
-          });
+        showPasswordModal(
+          "Enter user credentials to remove timer",
+          function (data, user, pass) {
+            apiPost(
+              "/api/timer/clear",
+              appendAdminCredentials("sw=" + switchIndex, user, pass),
+            )
+              .then(function (d) {
+                if (d.ok) {
+                  alert("Timer removed!");
+                  loadTimerList(true);
+                } else {
+                  alert(d.error || "Failed to remove timer");
+                }
+              })
+              .catch(function () {
+                alert("Connection error");
+              });
+          },
+        );
       }
 
       function pauseTimer(sw) {
         var switchIndex = parseInt(sw, 10) || 0;
-        apiPost("/api/timer/pause", "sw=" + switchIndex)
-          .then(function (d) {
-            if (d.ok) {
-              loadTimerList(true);
-            } else {
-              alert(d.error || "Failed to pause timer");
-            }
-          })
-          .catch(function () {
-            alert("Connection error");
-          });
+        showPasswordModal(
+          "Enter user credentials to pause timer",
+          function (data, user, pass) {
+            apiPost(
+              "/api/timer/pause",
+              appendAdminCredentials("sw=" + switchIndex, user, pass),
+            )
+              .then(function (d) {
+                if (d.ok) {
+                  loadTimerList(true);
+                } else {
+                  alert(d.error || "Failed to pause timer");
+                }
+              })
+              .catch(function () {
+                alert("Connection error");
+              });
+          },
+        );
       }
 
       function resumeTimer(sw) {
         var switchIndex = parseInt(sw, 10) || 0;
-        apiPost("/api/timer/resume", "sw=" + switchIndex)
-          .then(function (d) {
-            if (d.ok) {
-              loadTimerList(true);
-            } else {
-              alert(d.error || "Failed to resume timer");
-            }
-          })
-          .catch(function () {
-            alert("Connection error");
-          });
+        showPasswordModal(
+          "Enter user credentials to resume timer",
+          function (data, user, pass) {
+            apiPost(
+              "/api/timer/resume",
+              appendAdminCredentials("sw=" + switchIndex, user, pass),
+            )
+              .then(function (d) {
+                if (d.ok) {
+                  loadTimerList(true);
+                } else {
+                  alert(d.error || "Failed to resume timer");
+                }
+              })
+              .catch(function () {
+                alert("Connection error");
+              });
+          },
+        );
       }
 
       function toggleScheduleList(forceVisible) {
@@ -5996,40 +6142,49 @@
       function removeSchedule(sw, index) {
         var switchIndex = parseInt(sw, 10) || 0;
         var slotIndex = parseInt(index, 10) || 0;
-        apiGet("/api/schedules?sw=" + switchIndex)
-          .then(function (arr) {
-            var schedules = Array.isArray(arr) ? arr.slice() : [];
-            if (slotIndex < 0 || slotIndex >= schedules.length) {
-              throw new Error("Schedule not found");
-            }
-            schedules.splice(slotIndex, 1);
-            return apiPost(
-              "/api/schedules",
-              "sw=" +
-                switchIndex +
-                "&data=" +
-                encodeURIComponent(JSON.stringify(schedules)),
-            );
-          })
-          .then(function (d) {
-            if (d.ok) {
-              alert("Schedule removed!");
-              if (
-                document.getElementById("scheduleSwitch").value ===
-                String(switchIndex)
-              ) {
-                document.getElementById("scheduleContainer").style.display =
-                  "none";
-                clearAllSchedules();
-              }
-              loadScheduleList();
-            } else {
-              alert(d.error || "Failed to remove schedule");
-            }
-          })
-          .catch(function (err) {
-            alert(err && err.message ? err.message : "Connection error");
-          });
+        showPasswordModal(
+          "Enter user credentials to remove schedule",
+          function (data, user, pass) {
+            apiGet("/api/schedules?sw=" + switchIndex)
+              .then(function (arr) {
+                var schedules = Array.isArray(arr) ? arr.slice() : [];
+                if (slotIndex < 0 || slotIndex >= schedules.length) {
+                  throw new Error("Schedule not found");
+                }
+                schedules.splice(slotIndex, 1);
+                return apiPost(
+                  "/api/schedules",
+                  appendAdminCredentials(
+                    "sw=" +
+                      switchIndex +
+                      "&data=" +
+                      encodeURIComponent(JSON.stringify(schedules)),
+                    user,
+                    pass,
+                  ),
+                );
+              })
+              .then(function (d) {
+                if (d.ok) {
+                  alert("Schedule removed!");
+                  if (
+                    document.getElementById("scheduleSwitch").value ===
+                    String(switchIndex)
+                  ) {
+                    document.getElementById("scheduleContainer").style.display =
+                      "none";
+                    clearAllSchedules();
+                  }
+                  loadScheduleList();
+                } else {
+                  alert(d.error || "Failed to remove schedule");
+                }
+              })
+              .catch(function (err) {
+                alert(err && err.message ? err.message : "Connection error");
+              });
+          },
+        );
       }
 
       function toggleFutureScheduleList(forceVisible) {
@@ -6292,64 +6447,82 @@
           return;
         }
 
-        apiPost(
-          "/api/sensor/clear",
-          "sw=" +
-            encodeURIComponent(String(switchIndex)) +
-            "&type=" +
-            encodeURIComponent(sensorType),
-        )
-          .then(function (d) {
-            if (d.ok) {
-              alert("Sensor automation removed!");
-              loadSensorAutomationList();
-            } else {
-              alert(d.error || "Failed to remove sensor automation");
-            }
-          })
-          .catch(function () {
-            alert("Connection error");
-          });
+        showPasswordModal(
+          "Enter user credentials to remove " + sensorLabel + " automation",
+          function (data, user, pass) {
+            apiPost(
+              "/api/sensor/clear",
+              appendAdminCredentials(
+                "sw=" +
+                  encodeURIComponent(String(switchIndex)) +
+                  "&type=" +
+                  encodeURIComponent(sensorType),
+                user,
+                pass,
+              ),
+            )
+              .then(function (d) {
+                if (d.ok) {
+                  alert("Sensor automation removed!");
+                  loadSensorAutomationList();
+                } else {
+                  alert(d.error || "Failed to remove sensor automation");
+                }
+              })
+              .catch(function () {
+                alert("Connection error");
+              });
+          },
+        );
       }
 
       function removeFutureSchedule(sw, index) {
         var switchIndex = parseInt(sw, 10) || 0;
         var slotIndex = parseInt(index, 10) || 0;
-        apiGet("/api/fschedules?sw=" + switchIndex)
-          .then(function (arr) {
-            var schedules = Array.isArray(arr) ? arr.slice() : [];
-            if (slotIndex < 0 || slotIndex >= schedules.length) {
-              throw new Error("Future schedule not found");
-            }
-            schedules.splice(slotIndex, 1);
-            return apiPost(
-              "/api/fschedules",
-              "sw=" +
-                switchIndex +
-                "&data=" +
-                encodeURIComponent(JSON.stringify(schedules)),
-            );
-          })
-          .then(function (d) {
-            if (d.ok) {
-              alert("Future schedule removed!");
-              if (
-                document.getElementById("futureScheduleSwitch").value ===
-                String(switchIndex)
-              ) {
-                document.getElementById(
-                  "futureScheduleContainer",
-                ).style.display = "none";
-                clearAllFutureSchedules();
-              }
-              loadFutureScheduleList();
-            } else {
-              alert(d.error || "Failed to remove future schedule");
-            }
-          })
-          .catch(function (err) {
-            alert(err && err.message ? err.message : "Connection error");
-          });
+        showPasswordModal(
+          "Enter user credentials to remove future schedule",
+          function (data, user, pass) {
+            apiGet("/api/fschedules?sw=" + switchIndex)
+              .then(function (arr) {
+                var schedules = Array.isArray(arr) ? arr.slice() : [];
+                if (slotIndex < 0 || slotIndex >= schedules.length) {
+                  throw new Error("Future schedule not found");
+                }
+                schedules.splice(slotIndex, 1);
+                return apiPost(
+                  "/api/fschedules",
+                  appendAdminCredentials(
+                    "sw=" +
+                      switchIndex +
+                      "&data=" +
+                      encodeURIComponent(JSON.stringify(schedules)),
+                    user,
+                    pass,
+                  ),
+                );
+              })
+              .then(function (d) {
+                if (d.ok) {
+                  alert("Future schedule removed!");
+                  if (
+                    document.getElementById("futureScheduleSwitch").value ===
+                    String(switchIndex)
+                  ) {
+                    document.getElementById(
+                      "futureScheduleContainer",
+                    ).style.display = "none";
+                    clearAllFutureSchedules();
+                  }
+                  loadFutureScheduleList();
+                } else {
+                  alert(d.error || "Failed to remove future schedule");
+                }
+              })
+              .catch(function (err) {
+                alert(err && err.message ? err.message : "Connection error");
+              });
+          },
+        );
       }
 
       /* ══════════════════════════════════════════════════════════════
@@ -6380,11 +6553,22 @@
       var pendingPasswordAction = null;
       var pendingActionData = null;
 
-      function showPasswordModal(message, action, data) {
+      var validationState = {
+        loginEnabled: true,
+        loginMode: "sessional",
+        verifyEnabled: true,
+      };
+
+      function showPasswordModal(message, action, data, forceVerification) {
+        if (!forceVerification && !validationState.verifyEnabled) {
+          if (action) action(data, "", "");
+          return;
+        }
         passwordModalMsg.textContent = message;
         pendingPasswordAction = action;
         pendingActionData = data;
         var adminUserInput = document.getElementById("confirmAdminUser");
+        adminUserInput.placeholder = "User ID";
         adminUserInput.value = sessionStorage.getItem("smartHomeUser") || "";
         confirmPasswordInput.value = "";
         passwordModal.classList.remove("hidden");
@@ -7476,6 +7660,31 @@
       /* ══════════════════════════════════════════════════════════════
          TIME SETUP
       ══════════════════════════════════════════════════════════════ */
+      function updateLastSyncedUi(lastSynced) {
+        var el = document.getElementById("lastSyncedDisplay");
+        if (!el) return;
+        var text = lastSynced ? String(lastSynced).trim() : "";
+        el.textContent = "Last synced: " + (text || "Never");
+      }
+
+      function loadTimeSettings() {
+        return apiGet("/api/admin/time")
+          .then(function (d) {
+            if (d.ntp) document.getElementById("ntpServer").value = d.ntp;
+            if (d.tz) {
+              var sel = document.getElementById("timezoneSelect");
+              for (var i = 0; i < sel.options.length; i++) {
+                if (sel.options[i].value === d.tz) {
+                  sel.selectedIndex = i;
+                  break;
+                }
+              }
+            }
+            updateLastSyncedUi(d.lastSynced);
+          })
+          .catch(function () {});
+      }
+
       function saveTimeSettings() {
         var ntpServer = document.getElementById("ntpServer").value;
         var timezone = document.getElementById("timezoneSelect").value;
@@ -7489,6 +7698,7 @@
           .then(function (d) {
             if (d.ok) {
               alert("Time settings saved successfully!");
+              setTimeout(loadTimeSettings, 1200);
             } else {
               alert(d.error || "Save failed");
             }
@@ -7496,6 +7706,112 @@
           .catch(function () {
             alert("Connection error");
           });
+      }
+
+      function syncTimeNow() {
+        var btn = document.getElementById("syncTimeBtn");
+        var ntpServer = document.getElementById("ntpServer").value;
+        var timezone = document.getElementById("timezoneSelect").value;
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = "Syncing...";
+        }
+        apiPost(
+          "/api/admin/time/sync",
+          "ntp=" +
+            encodeURIComponent(ntpServer) +
+            "&tz=" +
+            encodeURIComponent(timezone),
+        )
+          .then(function (d) {
+            if (d && d.lastSynced) {
+              updateLastSyncedUi(d.lastSynced);
+            }
+            setTimeout(function () {
+              loadTimeSettings().then(function () {
+                if (btn) {
+                  btn.disabled = false;
+                  btn.textContent = "Sync";
+                }
+              });
+            }, 1500);
+          })
+          .catch(function () {
+            if (btn) {
+              btn.disabled = false;
+              btn.textContent = "Sync";
+            }
+            alert("Connection error");
+          });
+      }
+
+      function toggleValidationLoginMode() {
+        var loginCheck = document.getElementById("valLoginEnable");
+        var modeRow = document.getElementById("valLoginModeRow");
+        if (loginCheck && modeRow) {
+          modeRow.style.display = loginCheck.checked ? "" : "none";
+        }
+      }
+
+      function loadValidationSettings() {
+        return apiGet("/api/admin/validation")
+          .then(function (d) {
+            if (!d) return;
+            validationState.loginEnabled = d.loginEnabled !== false;
+            validationState.loginMode =
+              d.loginMode === "everytime" ? "everytime" : "sessional";
+            validationState.verifyEnabled = d.verifyEnabled !== false;
+
+            var loginEl = document.getElementById("valLoginEnable");
+            var modeEl = document.getElementById("valLoginMode");
+            var verifyEl = document.getElementById("valVerifyEnable");
+            if (loginEl) loginEl.checked = validationState.loginEnabled;
+            if (modeEl) modeEl.value = validationState.loginMode;
+            if (verifyEl) verifyEl.checked = validationState.verifyEnabled;
+            toggleValidationLoginMode();
+          })
+          .catch(function () {});
+      }
+
+      function saveValidationSettings() {
+        var loginEn = document.getElementById("valLoginEnable").checked;
+        var loginMd = document.getElementById("valLoginMode").value;
+        var verifyEn = document.getElementById("valVerifyEnable").checked;
+
+        // Always require User Verification (forceVerification = true)
+        showPasswordModal(
+          "Enter user credentials to update Validation settings",
+          function (data, user, pass) {
+            apiPost(
+              "/api/admin/validation",
+              appendAdminCredentials(
+                "loginEnabled=" +
+                  loginEn +
+                  "&loginMode=" +
+                  encodeURIComponent(loginMd) +
+                  "&verifyEnabled=" +
+                  verifyEn,
+                user,
+                pass,
+              ),
+            )
+              .then(function (d) {
+                if (d && d.ok) {
+                  validationState.loginEnabled = d.loginEnabled !== false;
+                  validationState.loginMode = d.loginMode || "sessional";
+                  validationState.verifyEnabled = d.verifyEnabled !== false;
+                  alert("Validation settings saved successfully!");
+                } else {
+                  alert((d && d.error) || "Failed to save validation settings");
+                }
+              })
+              .catch(function () {
+                alert("Connection error");
+              });
+          },
+          null,
+          true,
+        );
       }
 
       /* ══════════════════════════════════════════════════════════════
@@ -7735,27 +8051,36 @@
           }
         }
 
-        apiPost(
-          "/api/sensor/temp",
-          "data=" + encodeURIComponent(JSON.stringify(settings)),
-        )
-          .then(function (d) {
-            if (d.ok) {
-              alert("Temperature control settings saved successfully!");
-              if (
-                document
-                  .getElementById("sensorAutomationList")
-                  .classList.contains("active")
-              ) {
-                loadSensorAutomationList();
-              }
-            } else {
-              alert(d.error || "Save failed");
-            }
-          })
-          .catch(function () {
-            alert("Connection error");
-          });
+        showPasswordModal(
+          "Enter user credentials to save temperature control",
+          function (data, user, pass) {
+            apiPost(
+              "/api/sensor/temp",
+              appendAdminCredentials(
+                "data=" + encodeURIComponent(JSON.stringify(settings)),
+                user,
+                pass,
+              ),
+            )
+              .then(function (d) {
+                if (d.ok) {
+                  alert("Temperature control settings saved successfully!");
+                  if (
+                    document
+                      .getElementById("sensorAutomationList")
+                      .classList.contains("active")
+                  ) {
+                    loadSensorAutomationList();
+                  }
+                } else {
+                  alert(d.error || "Save failed");
+                }
+              })
+              .catch(function () {
+                alert("Connection error");
+              });
+          },
+        );
       }
 
       function saveHumidControl() {
@@ -7786,27 +8111,36 @@
           }
         }
 
-        apiPost(
-          "/api/sensor/humid",
-          "data=" + encodeURIComponent(JSON.stringify(settings)),
-        )
-          .then(function (d) {
-            if (d.ok) {
-              alert("Humidity control settings saved successfully!");
-              if (
-                document
-                  .getElementById("sensorAutomationList")
-                  .classList.contains("active")
-              ) {
-                loadSensorAutomationList();
-              }
-            } else {
-              alert(d.error || "Save failed");
-            }
-          })
-          .catch(function () {
-            alert("Connection error");
-          });
+        showPasswordModal(
+          "Enter user credentials to save humidity control",
+          function (data, user, pass) {
+            apiPost(
+              "/api/sensor/humid",
+              appendAdminCredentials(
+                "data=" + encodeURIComponent(JSON.stringify(settings)),
+                user,
+                pass,
+              ),
+            )
+              .then(function (d) {
+                if (d.ok) {
+                  alert("Humidity control settings saved successfully!");
+                  if (
+                    document
+                      .getElementById("sensorAutomationList")
+                      .classList.contains("active")
+                  ) {
+                    loadSensorAutomationList();
+                  }
+                } else {
+                  alert(d.error || "Save failed");
+                }
+              })
+              .catch(function () {
+                alert("Connection error");
+              });
+          },
+        );
       }
 
       function saveSunControl() {
@@ -7824,27 +8158,36 @@
           enabled: enabled,
         };
 
-        apiPost(
-          "/api/sensor/sun",
-          "data=" + encodeURIComponent(JSON.stringify(settings)),
-        )
-          .then(function (d) {
-            if (d.ok) {
-              alert("Sunset/Sunrise control settings saved successfully!");
-              if (
-                document
-                  .getElementById("sensorAutomationList")
-                  .classList.contains("active")
-              ) {
-                loadSensorAutomationList();
-              }
-            } else {
-              alert(d.error || "Save failed");
-            }
-          })
-          .catch(function () {
-            alert("Connection error");
-          });
+        showPasswordModal(
+          "Enter user credentials to save sunset/sunrise control",
+          function (data, user, pass) {
+            apiPost(
+              "/api/sensor/sun",
+              appendAdminCredentials(
+                "data=" + encodeURIComponent(JSON.stringify(settings)),
+                user,
+                pass,
+              ),
+            )
+              .then(function (d) {
+                if (d.ok) {
+                  alert("Sunset/Sunrise control settings saved successfully!");
+                  if (
+                    document
+                      .getElementById("sensorAutomationList")
+                      .classList.contains("active")
+                  ) {
+                    loadSensorAutomationList();
+                  }
+                } else {
+                  alert(d.error || "Save failed");
+                }
+              })
+              .catch(function () {
+                alert("Connection error");
+              });
+          },
+        );
       }
 
       /* ══════════════════════════════════════════════════════════════
@@ -8306,34 +8649,43 @@
               var h = timerHoursInput ? timerHoursInput.value : 0;
               var m = timerMinutesInput ? timerMinutesInput.value : 0;
               var s = timerSecondsInput ? timerSecondsInput.value : 0;
-              apiPost(
-                "/api/timer/set",
-                "sw=" +
-                  sw +
-                  "&h=" +
-                  h +
-                  "&m=" +
-                  m +
-                  "&s=" +
-                  s +
-                  "&action=" +
-                  action,
-              )
-                .then(function (d) {
-                  if (d.ok) {
-                    alert("Timer set!");
-                    if (
-                      document
-                        .getElementById("timerList")
-                        .classList.contains("active")
-                    ) {
-                      loadTimerList();
-                    }
-                  } else alert(d.error || "Failed");
-                })
-                .catch(function () {
-                  alert("Connection error");
-                });
+              showPasswordModal(
+                "Enter user credentials to set timer",
+                function (data, user, pass) {
+                  apiPost(
+                    "/api/timer/set",
+                    appendAdminCredentials(
+                      "sw=" +
+                        sw +
+                        "&h=" +
+                        h +
+                        "&m=" +
+                        m +
+                        "&s=" +
+                        s +
+                        "&action=" +
+                        action,
+                      user,
+                      pass,
+                    ),
+                  )
+                    .then(function (d) {
+                      if (d.ok) {
+                        alert("Timer set!");
+                        if (
+                          document
+                            .getElementById("timerList")
+                            .classList.contains("active")
+                        ) {
+                          loadTimerList();
+                        }
+                      } else alert(d.error || "Failed");
+                    })
+                    .catch(function () {
+                      alert("Connection error");
+                    });
+                },
+              );
             });
           }
         }
@@ -8504,20 +8856,8 @@
 
         setTimeout(
           function () {
-            apiGet("/api/admin/time")
-              .then(function (d) {
-                if (d.ntp) document.getElementById("ntpServer").value = d.ntp;
-                if (d.tz) {
-                  var sel = document.getElementById("timezoneSelect");
-                  for (var i = 0; i < sel.options.length; i++) {
-                    if (sel.options[i].value === d.tz) {
-                      sel.selectedIndex = i;
-                      break;
-                    }
-                  }
-                }
-              })
-              .catch(function () {});
+            loadTimeSettings();
+            loadValidationSettings();
           },
           (loadDelay += delayStep),
         );

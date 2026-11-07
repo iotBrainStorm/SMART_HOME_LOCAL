@@ -1533,29 +1533,58 @@
       });
 
       /* ── Auto-login if session exists or remembered (Staggered Load) ── */
+      function openDashboardDirectly() {
+        loginScreen.classList.add("hidden");
+        dashboard.classList.remove("hidden");
+
+        setTimeout(function () {
+          loadDeviceTimezone();
+          updateClock();
+        }, 50);
+
+        setTimeout(function () {
+          loadSwitches();
+        }, 200);
+      }
+
+      /* ── Auto-login based on Validation settings (Disabled / Sessional / Every time) ── */
       function initSession() {
-        if (isLoggedIn() || checkRemembered()) {
-          if (checkRemembered()) {
-            sessionStorage.setItem(SESSION_KEY, "true");
-          }
-          loginScreen.classList.add("hidden");
-          dashboard.classList.remove("hidden");
+        fetch("/api/admin/validation", { cache: "no-store" })
+          .then(function (r) {
+            return r.ok ? r.json() : null;
+          })
+          .catch(function () {
+            return null;
+          })
+          .then(function (val) {
+            var loginEnabled = !val || val.loginEnabled !== false;
+            var loginMode =
+              val && val.loginMode === "everytime" ? "everytime" : "sessional";
 
-          // Staggering the initial loads prevents memory spikes
-          setTimeout(function () {
-            loadDeviceTimezone();
-            updateClock();
-          }, 50);
+            // 1. Login disabled -> go straight to dashboard
+            if (!loginEnabled) {
+              openDashboardDirectly();
+              document.body.classList.remove("app-init");
+              return;
+            }
 
-          setTimeout(function () {
-            loadSwitches();
-          }, 250);
+            // 2. "Every time" mode -> clear stored session on page refresh so login is required
+            if (loginMode === "everytime") {
+              sessionStorage.removeItem(SESSION_KEY);
+              localStorage.removeItem(REMEMBER_KEY);
+              document.body.classList.remove("app-init");
+              return;
+            }
 
-          setTimeout(function () {
-            loadAutomationFeatureIndicators();
-          }, 500);
-        }
-        document.body.classList.remove("app-init");
+            // 3. "Sessional" mode -> present login behavior
+            if (isLoggedIn() || checkRemembered()) {
+              if (checkRemembered()) {
+                sessionStorage.setItem(SESSION_KEY, "true");
+              }
+              openDashboardDirectly();
+            }
+            document.body.classList.remove("app-init");
+          });
       }
 
       /* ── Periodic dashboard refresh ── */

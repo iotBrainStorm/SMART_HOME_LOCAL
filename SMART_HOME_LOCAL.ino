@@ -105,6 +105,14 @@ float geoLat = DEFAULT_LATITUDE, geoLon = DEFAULT_LONGITUDE;
 String deviceName = "";
 String mdnsName = "";
 volatile bool timeSynced = false;
+String lastSyncTimeStr = "";
+volatile bool syncTimestampPending = false;
+
+// Validation settings (Default: Enabled & Sessional)
+bool loginEnabled = true;
+String loginMode = "sessional"; // "sessional" or "everytime"
+bool verifyEnabled = true;
+
 bool ahtOk = false;
 bool locOk = true;
 bool showTemp = false;
@@ -555,6 +563,14 @@ void loadAdminSettings() {
   for (int i = 0; i < AUTOMATION_SOURCE_COUNT; i++) {
     loadedPriority[i] = (uint8_t)prefs.getInt(("pr" + String(i)).c_str(), i);
   }
+  loginEnabled = prefs.getBool("valLogEn", true);
+  loginMode = prefs.getString("valLogMd", "sessional");
+  loginMode.trim();
+  loginMode.toLowerCase();
+  if (loginMode != "everytime")
+    loginMode = "sessional";
+  verifyEnabled = prefs.getBool("valVerEn", true);
+  lastSyncTimeStr = prefs.getString("lastSync", "");
   prefs.end();
 
   storedDeviceName.trim();
@@ -871,6 +887,18 @@ void resetTempHumDisplayToDefault() {
   prefs.end();
 }
 
+void resetValidationToDefault() {
+  loginEnabled = true;
+  loginMode = "sessional";
+  verifyEnabled = true;
+
+  prefs.begin("admin", false);
+  prefs.putBool("valLogEn", true);
+  prefs.putString("valLogMd", "sessional");
+  prefs.putBool("valVerEn", true);
+  prefs.end();
+}
+
 void resetRelayStatesToDefault() {
   prefs.begin("sw", false);
   for (int i = 0; i < NUM_SWITCHES; i++) {
@@ -1112,7 +1140,39 @@ bool verifyAdmin(const String &u, const String &p) {
   return false;
 }
 
+bool verifyAnyUser(const String &u, const String &p) {
+  String role;
+  return verifyLogin(u, p, role);
+}
+
+bool requireUserVerification(AsyncWebServerRequest *req, bool forceAlways = false) {
+  if (!forceAlways && !verifyEnabled) {
+    return true;
+  }
+
+  if (!req->hasParam("adminUser", true) || !req->hasParam("adminPass", true)) {
+    req->send(400, "application/json", "{\"error\":\"User credentials required\"}");
+    return false;
+  }
+
+  String user = req->getParam("adminUser", true)->value();
+  String pass = req->getParam("adminPass", true)->value();
+
+  if (!verifyAnyUser(user, pass)) {
+    initDefaultUser();
+    if (!verifyAnyUser(user, pass)) {
+      req->send(403, "application/json", "{\"error\":\"User verification failed\"}");
+      return false;
+    }
+  }
+  return true;
+}
+
 bool requireAdminVerification(AsyncWebServerRequest *req) {
+  if (!verifyEnabled) {
+    return true;
+  }
+
   if (!req->hasParam("adminUser", true) || !req->hasParam("adminPass", true)) {
     req->send(400, "application/json", "{\"error\":\"Admin credentials required\"}");
     return false;
@@ -1260,9 +1320,34 @@ static char ntpServerBuf[64] = "pool.ntp.org";
 volatile bool ntpResyncPending = false;
 volatile bool sunCalcPending = false;
 
+String formatSyncTimestamp(const struct tm *ti) {
+  if (!ti)
+    return "";
+  const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  int monIdx = (ti->tm_mon >= 0 && ti->tm_mon < 12) ? ti->tm_mon : 0;
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%d %s %04d %02d:%02d:%02d",
+           ti->tm_mday, months[monIdx], ti->tm_year + 1900,
+           ti->tm_hour, ti->tm_min, ti->tm_sec);
+  return String(buf);
+}
+
+void updateLastSyncTimestamp() {
+  struct tm ti;
+  if (readCurrentLocalTime(&ti)) {
+    timeSynced = true;
+    lastSyncTimeStr = formatSyncTimestamp(&ti);
+    prefs.begin("admin", false);
+    prefs.putString("lastSync", lastSyncTimeStr);
+    prefs.end();
+  }
+}
+
 void sntpTimeAvailableCallback(struct timeval *t) {
   timeSynced = true;
   sunCalcPending = true; // Handled safely inside loop()
+  syncTimestampPending = true;
 }
 
 bool syncTime(struct tm *syncedTime = nullptr) {
@@ -1906,6 +1991,9 @@ void setupWebServer() {
   server.on("/api/dashboard", HTTP_GET, [](AsyncWebServerRequest *req) {
     JsonDocument d;
     d["timeSynced"] = timeSynced;
+    d["loginEnabled"] = loginEnabled;
+    d["loginMode"] = loginMode;
+    d["verifyEnabled"] = verifyEnabled;
     d["ahtOk"] = ahtOk;
     d["showTemp"] = showTemp;
     d["showHumid"] = showHumid;
@@ -2088,6 +2176,8 @@ void setupWebServer() {
     coreRoutesOnly = false;
 
     server.on("/api/timer/set", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!requireUserVerification(req))
+        return;
       if (!req->hasParam("sw", true)) {
         req->send(400, "application/json", "{\"error\":\"Missing sw\"}");
         return;
@@ -2156,6 +2246,8 @@ void setupWebServer() {
     });
 
     server.on("/api/timer/pause", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!requireUserVerification(req))
+        return;
       if (!req->hasParam("sw", true)) {
         req->send(400, "application/json", "{\"error\":\"Missing sw\"}");
         return;
@@ -2193,6 +2285,8 @@ void setupWebServer() {
     });
 
     server.on("/api/timer/resume", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!requireUserVerification(req))
+        return;
       if (!req->hasParam("sw", true)) {
         req->send(400, "application/json", "{\"error\":\"Missing sw\"}");
         return;
@@ -2231,6 +2325,8 @@ void setupWebServer() {
     });
 
     server.on("/api/timer/clear", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!requireUserVerification(req))
+        return;
       if (req->hasParam("sw", true)) {
         int sw = req->getParam("sw", true)->value().toInt();
         if (sw >= 0 && sw < NUM_SWITCHES) {
@@ -2252,6 +2348,8 @@ void setupWebServer() {
     });
 
     server.on("/api/schedules", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!requireUserVerification(req))
+        return;
       if (!req->hasParam("sw", true) || !req->hasParam("data", true)) {
         req->send(400, "application/json", "{\"error\":\"Missing params\"}");
         return;
@@ -2287,6 +2385,8 @@ void setupWebServer() {
     });
 
     server.on("/api/fschedules", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!requireUserVerification(req))
+        return;
       if (!req->hasParam("sw", true) || !req->hasParam("data", true)) {
         req->send(400, "application/json", "{\"error\":\"Missing params\"}");
         return;
@@ -2322,6 +2422,8 @@ void setupWebServer() {
     });
 
     server.on("/api/sensor/temp", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!requireUserVerification(req))
+        return;
       if (!req->hasParam("data", true)) {
         req->send(400, "application/json", "{\"error\":\"Missing data\"}");
         return;
@@ -2353,6 +2455,8 @@ void setupWebServer() {
     });
 
     server.on("/api/sensor/humid", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!requireUserVerification(req))
+        return;
       if (!req->hasParam("data", true)) {
         req->send(400, "application/json", "{\"error\":\"Missing data\"}");
         return;
@@ -2384,6 +2488,8 @@ void setupWebServer() {
     });
 
     server.on("/api/sensor/sun", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!requireUserVerification(req))
+        return;
       if (!req->hasParam("data", true)) {
         req->send(400, "application/json", "{\"error\":\"Missing data\"}");
         return;
@@ -2411,6 +2517,8 @@ void setupWebServer() {
     });
 
     server.on("/api/sensor/clear", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!requireUserVerification(req))
+        return;
       if (!req->hasParam("sw", true) || !req->hasParam("type", true)) {
         req->send(400, "application/json", "{\"error\":\"Missing params\"}");
         return;
@@ -2970,10 +3078,14 @@ void setupWebServer() {
     });
 
     server.on("/api/admin/time", HTTP_GET, [](AsyncWebServerRequest *req) {
+      if (timeSynced && lastSyncTimeStr.isEmpty()) {
+        updateLastSyncTimestamp();
+      }
       JsonDocument d;
       d["ntp"] = ntpSrv;
       d["tz"] = tzStr;
       d["synced"] = timeSynced;
+      d["lastSynced"] = lastSyncTimeStr;
       AsyncResponseStream *response = req->beginResponseStream("application/json");
       serializeJson(d, *response);
       req->send(response);
@@ -2994,6 +3106,35 @@ void setupWebServer() {
       ntpResyncPending = true;
       lastCheckedMinute = -1;
       req->send(200, "application/json", "{\"ok\":true}");
+    });
+
+    server.on("/api/admin/time/sync", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (req->hasParam("ntp", true))
+        ntpSrv = req->getParam("ntp", true)->value();
+      if (req->hasParam("tz", true)) {
+        tzStr = req->getParam("tz", true)->value();
+        parseTZ();
+      }
+      prefs.begin("admin", false);
+      prefs.putString("ntp", ntpSrv);
+      prefs.putString("tz", tzStr);
+      prefs.end();
+
+      bool ok = syncTime();
+      updateLastSyncTimestamp();
+      ntpResyncPending = true;
+      lastCheckedMinute = -1;
+      notifyStorage();
+
+      JsonDocument d;
+      d["ok"] = ok;
+      d["synced"] = timeSynced;
+      d["lastSynced"] = lastSyncTimeStr;
+      if (!ok)
+        d["error"] = "WiFi not connected";
+      AsyncResponseStream *response = req->beginResponseStream("application/json");
+      serializeJson(d, *response);
+      req->send(response);
     });
 
     server.on("/api/admin/location", HTTP_GET, [](AsyncWebServerRequest *req) {
@@ -3046,6 +3187,49 @@ void setupWebServer() {
       d["sunReady"] = hasSunValues;
       d["sunrise"] = hasSunValues ? formatClockFromMinutes(srMin) : "";
       d["sunset"] = hasSunValues ? formatClockFromMinutes(ssMin) : "";
+      AsyncResponseStream *response = req->beginResponseStream("application/json");
+      serializeJson(d, *response);
+      req->send(response);
+    });
+
+    server.on("/api/admin/validation", HTTP_GET, [](AsyncWebServerRequest *req) {
+      JsonDocument d;
+      d["loginEnabled"] = loginEnabled;
+      d["loginMode"] = loginMode;
+      d["verifyEnabled"] = verifyEnabled;
+      AsyncResponseStream *response = req->beginResponseStream("application/json");
+      serializeJson(d, *response);
+      req->send(response);
+    });
+
+    server.on("/api/admin/validation", HTTP_POST, [](AsyncWebServerRequest *req) {
+      // Always require User Verification to change Validation settings
+      if (!requireUserVerification(req, true))
+        return;
+
+      if (req->hasParam("loginEnabled", true))
+        loginEnabled = req->getParam("loginEnabled", true)->value() == "true";
+      if (req->hasParam("loginMode", true)) {
+        String mode = req->getParam("loginMode", true)->value();
+        mode.trim();
+        mode.toLowerCase();
+        loginMode = (mode == "everytime") ? "everytime" : "sessional";
+      }
+      if (req->hasParam("verifyEnabled", true))
+        verifyEnabled = req->getParam("verifyEnabled", true)->value() == "true";
+
+      prefs.begin("admin", false);
+      prefs.putBool("valLogEn", loginEnabled);
+      prefs.putString("valLogMd", loginMode);
+      prefs.putBool("valVerEn", verifyEnabled);
+      prefs.end();
+      notifyStorage();
+
+      JsonDocument d;
+      d["ok"] = true;
+      d["loginEnabled"] = loginEnabled;
+      d["loginMode"] = loginMode;
+      d["verifyEnabled"] = verifyEnabled;
       AsyncResponseStream *response = req->beginResponseStream("application/json");
       serializeJson(d, *response);
       req->send(response);
@@ -3191,12 +3375,16 @@ void setupWebServer() {
 
     server.on("/api/admin/performance", HTTP_GET, [](AsyncWebServerRequest *req) {
       JsonDocument d;
+      uint32_t totalHeap = ESP.getHeapSize();
+      uint32_t freeHeap = ESP.getFreeHeap();
       d["cpuFreq"] = ESP.getCpuFreqMHz();
       d["cpuTemp"] = temperatureRead();
-      d["freeHeap"] = ESP.getFreeHeap();
+      d["freeHeap"] = freeHeap;
       d["minHeap"] = ESP.getMinFreeHeap();
       d["maxBlock"] = ESP.getMaxAllocHeap();
-      d["heapSize"] = ESP.getHeapSize();
+      d["heapSize"] = totalHeap;
+      d["ramUsed"] = (totalHeap > freeHeap) ? (totalHeap - freeHeap) : 0;
+      d["ramTotal"] = totalHeap;
       d["spiffsUsed"] = SPIFFS.usedBytes();
       d["spiffsTotal"] = SPIFFS.totalBytes();
       d["uptime"] = millis() / 1000;
@@ -3342,6 +3530,8 @@ void setupWebServer() {
       addResetStep(steps, "reset-settings", "Reset Settings applied", 760);
       resetUsersToSingleDefaultAdmin();
       addResetStep(steps, "default-admin", "Default admin user restored to esp / 456456", 650);
+      resetValidationToDefault();
+      addResetStep(steps, "validation", "Login and verification restored to default (Enabled)", 520);
       addResetStep(steps, "normal-users", "All normal users cleared", 580);
       addResetStep(steps, "wifi-credentials", "WiFi credentials cleared", 520);
       notifyStorage();
@@ -3493,6 +3683,11 @@ void loop() {
   if (sunCalcPending) {
     sunCalcPending = false;
     calcSunriseSunset();
+  }
+
+  if (syncTimestampPending) {
+    syncTimestampPending = false;
+    updateLastSyncTimestamp();
   }
 
   // Silent non-blocking Wi-Fi reconnect every 20s if router was off or dropped
