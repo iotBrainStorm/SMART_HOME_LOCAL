@@ -2113,6 +2113,19 @@
           </div>
           <div class="setting-row">
             <div class="setting-info">
+              <div class="setting-label">Current Temperature</div>
+              <div class="setting-sub">Real-time AHT10 sensor reading</div>
+            </div>
+            <div
+              class="status-value mono"
+              id="liveAutoTemp"
+              style="color: #60a5fa; font-size: 0.95rem"
+            >
+              -- °C
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
               <div class="setting-label">Select Switch</div>
             </div>
             <select class="cfg-input" id="tempSwitch" style="max-width: 200px">
@@ -2204,6 +2217,19 @@
           <div class="info-box">
             <strong>Humidity Control</strong> — Automatically control switches
             based on humidity sensor readings.
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Current Humidity</div>
+              <div class="setting-sub">Real-time AHT10 sensor reading</div>
+            </div>
+            <div
+              class="status-value mono"
+              id="liveAutoHumid"
+              style="color: #34d399; font-size: 0.95rem"
+            >
+              -- %
+            </div>
           </div>
           <div class="setting-row">
             <div class="setting-info">
@@ -2302,6 +2328,19 @@
             <strong>Sunset & Sunrise Control</strong> — Automatically control
             switches based on sunset and sunrise times. Requires location to be
             configured in Administrator → Location Setup.
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Today's Sunrise & Sunset</div>
+              <div class="setting-sub">Based on configured device location</div>
+            </div>
+            <div
+              class="status-value mono"
+              id="liveAutoSun"
+              style="color: #fbbf24; font-size: 0.88rem"
+            >
+              Sunrise: --:-- | Sunset: --:--
+            </div>
           </div>
           <div class="setting-row">
             <div class="setting-info">
@@ -4218,6 +4257,55 @@
         }
       }
 
+      var sensorAutoRealtimeInterval = null;
+
+      function loadSensorAutoRealtimeValues() {
+        apiGet("/api/status")
+          .then(function (d) {
+            if (!d) return;
+            var tempEl = document.getElementById("liveAutoTemp");
+            var humidEl = document.getElementById("liveAutoHumid");
+            var sunEl = document.getElementById("liveAutoSun");
+
+            if (tempEl) {
+              tempEl.textContent =
+                d.ahtOk && d.temp !== undefined
+                  ? Number(d.temp).toFixed(d.tempPrec || 1) + " °C"
+                  : "Sensor Unavailable";
+            }
+            if (humidEl) {
+              humidEl.textContent =
+                d.ahtOk && d.humid !== undefined
+                  ? Number(d.humid).toFixed(d.humidPrec || 1) + " %"
+                  : "Sensor Unavailable";
+            }
+            if (sunEl) {
+              sunEl.textContent =
+                d.sunReady && d.sunrise && d.sunset
+                  ? "Sunrise: " + d.sunrise + " | Sunset: " + d.sunset
+                  : "Sunrise/Sunset unavailable";
+            }
+          })
+          .catch(function () {});
+      }
+
+      function startSensorAutoRealtimeMonitor() {
+        loadSensorAutoRealtimeValues();
+        if (!sensorAutoRealtimeInterval) {
+          sensorAutoRealtimeInterval = setInterval(
+            loadSensorAutoRealtimeValues,
+            2500,
+          );
+        }
+      }
+
+      function stopSensorAutoRealtimeMonitor() {
+        if (sensorAutoRealtimeInterval) {
+          clearInterval(sensorAutoRealtimeInterval);
+          sensorAutoRealtimeInterval = null;
+        }
+      }
+
       /* ── Data: tabs → sidebar items → panel IDs ── */
       var tabConfig = {
         switches: [
@@ -4363,6 +4451,16 @@
           startWifiStatusMonitor();
         } else if (typeof stopWifiStatusMonitor === "function") {
           stopWifiStatusMonitor();
+        }
+
+        if (
+          panelId === "panel-auto-sensor-temp" ||
+          panelId === "panel-auto-sensor-humid" ||
+          panelId === "panel-auto-sensor-sun"
+        ) {
+          startSensorAutoRealtimeMonitor();
+        } else if (typeof stopSensorAutoRealtimeMonitor === "function") {
+          stopSensorAutoRealtimeMonitor();
         }
 
         if (panelId === "panel-admin-location") {
@@ -7488,7 +7586,7 @@
 
       function updateWifiSignalUI(connected, rssi) {
         var textEl = document.getElementById("wifiStatusSignalText");
-        var iconEl = document.getElementById("wifiSignalIcon"); // Updated ID
+        var iconEl = document.getElementById("wifiSignalIcon");
         if (!textEl || !iconEl) return;
 
         iconEl.className = "wifi-icon"; // Reset all colors
@@ -7504,21 +7602,22 @@
           return;
         }
 
-        var quality = "Weak";
-        var barClass = "signal-weak";
+        // Convert RSSI (-100 dBm to -38 dBm) to 0% - 100%
+        // e.g. -45 dBm -> 89% (-45dBm)
+        var percent = Math.round(
+          Math.min(100, Math.max(0, ((signalValue + 100) / 62) * 100)),
+        );
 
+        var barClass = "signal-weak";
         if (signalValue >= -55) {
-          quality = "Superb";
           barClass = "signal-excel";
         } else if (signalValue >= -67) {
-          quality = "Good";
           barClass = "signal-good";
         } else if (signalValue >= -75) {
-          quality = "Fair";
           barClass = "signal-fair";
         }
 
-        textEl.textContent = signalValue + " dBm (" + quality + ")";
+        textEl.textContent = percent + "% (" + signalValue + "dBm)";
         iconEl.classList.add(barClass);
       }
 

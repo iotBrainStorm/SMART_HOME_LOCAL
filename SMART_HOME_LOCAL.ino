@@ -1,6 +1,7 @@
 #include "esp_sntp.h"
 #include "time.h"
 #include <Arduino.h>
+#include <Ticker.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <new>
@@ -28,6 +29,7 @@
 #define OUTPUT_SWITCH_4 5
 
 #define LED_PIN 16
+#define BUILTIN_LED_PIN 2
 #define BUZZER_PIN 17
 #define BOOT_BUTTON 0
 
@@ -350,6 +352,9 @@ void prepareWifiForConfigPortal() {
   delay(100);
 }
 
+Ticker apLedTicker;
+volatile bool apLedState = false;
+
 bool runWifiConfigPortal(bool notifyChange = false,
                          bool restartOnSuccess = true) {
   WiFiManager wm;
@@ -359,9 +364,25 @@ bool runWifiConfigPortal(bool notifyChange = false,
   wm.setAPCallback([](WiFiManager *myWiFiManager) {
     Serial.println("[WIFI] Config portal ready - connect to 'ESP HOME'");
   });
+
   prepareWifiForConfigPortal();
   Serial.println("[WIFI] Starting forced config portal...");
+
+  // Start blinking built-in LED (GPIO 2) and LED_PIN (GPIO 16) every 250ms
+  apLedState = false;
+  apLedTicker.attach_ms(250, []() {
+    apLedState = !apLedState;
+    digitalWrite(BUILTIN_LED_PIN, apLedState ? HIGH : LOW);
+    digitalWrite(LED_PIN, apLedState ? HIGH : LOW);
+  });
+
   success = wm.startConfigPortal("ESP HOME");
+
+  // Stop blinking and turn LEDs OFF when AP portal exits
+  apLedTicker.detach();
+  apLedState = false;
+  digitalWrite(BUILTIN_LED_PIN, LOW);
+  digitalWrite(LED_PIN, LOW);
 
   if (success) {
     Serial.println("\n[OK] WiFi Connected via Portal");
@@ -1983,6 +2004,14 @@ void setupWebServer() {
       d["humid"] = currentHumid;
     }
 
+    if (locOk && timeSynced) {
+      calcSunriseSunset();
+    }
+    bool hasSunValues = lastCalcDay >= 0 && srMin >= 0 && srMin <= 1439 && ssMin >= 0 && ssMin <= 1439;
+    d["sunReady"] = hasSunValues;
+    d["sunrise"] = hasSunValues ? formatClockFromMinutes(srMin) : "";
+    d["sunset"] = hasSunValues ? formatClockFromMinutes(ssMin) : "";
+
     AsyncResponseStream *response = req->beginResponseStream("application/json");
     serializeJson(d, *response);
     req->send(response);
@@ -3579,6 +3608,8 @@ void setup() {
     rawInState[i] = lastInState[i];
   }
   pinMode(LED_PIN, OUTPUT);
+  pinMode(BUILTIN_LED_PIN, OUTPUT);
+  digitalWrite(BUILTIN_LED_PIN, LOW);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(BOOT_BUTTON, INPUT_PULLUP);
 
@@ -3616,7 +3647,11 @@ void setup() {
   Wire.begin();
   if (aht.begin()) {
     ahtOk = true;
-    Serial.println("[OK] AHT10 sensor detected");
+    sensors_event_t hev, tev;
+    aht.getEvent(&hev, &tev);
+    currentTemp = tev.temperature;
+    currentHumid = hev.relative_humidity;
+    Serial.println("[OK] AHT10 sensor detected & initial reading taken");
   } else {
     Serial.println("[WARN] AHT10 not detected");
   }
@@ -3716,7 +3751,7 @@ void loop() {
     checkRestartSchedule();
   }
 
-  if (now - lastSensorCheck >= 30000UL) {
+  if (now - lastSensorCheck >= 2500UL) {
     lastSensorCheck = now;
     checkSensors();
   }
