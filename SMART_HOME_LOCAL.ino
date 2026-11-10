@@ -102,6 +102,7 @@ String configuredPrimaryAdminPass = String(PRIMARY_ADMIN_PASS);
 // Admin / Time
 String ntpSrv = DEFAULT_NTP_SERVER;
 String tzStr = DEFAULT_TIME_ZONE;
+String timeFormat = "24h"; // "12h" or "24h"
 long gmtOff = 0;
 float geoLat = DEFAULT_LATITUDE, geoLon = DEFAULT_LONGITUDE;
 String deviceName = "";
@@ -114,6 +115,12 @@ volatile bool syncTimestampPending = false;
 bool loginEnabled = true;
 String loginMode = "sessional"; // "sessional" or "everytime"
 bool verifyEnabled = true;
+int maxLoginAttempts = 3;                            // 1 to 5
+String lockoutMode = "restart_or_1h";                // "restart_or_1h" or "restart_only"
+int failedAttempts = 0;                              //
+bool isLockedOut = false;                            //
+unsigned long lockoutStartMs = 0;                    //
+const unsigned long LOCKOUT_DURATION_MS = 3600000UL; // 1 Hour
 
 bool ahtOk = false;
 bool locOk = true;
@@ -403,6 +410,10 @@ bool runWifiConfigPortal(bool notifyChange = false,
 }
 
 String getDefaultMdnsName() {
+  return "smarthome";
+}
+
+String getMacMdnsName() {
   // Read the MAC directly from hardware eFuse before WiFi even starts
   uint64_t chipId = ESP.getEfuseMac();
   char buf[13];
@@ -591,6 +602,15 @@ void loadAdminSettings() {
   if (loginMode != "everytime")
     loginMode = "sessional";
   verifyEnabled = prefs.getBool("valVerEn", true);
+  maxLoginAttempts = prefs.getInt("valMaxAtt", 3);
+  if (maxLoginAttempts < 1 || maxLoginAttempts > 5)
+    maxLoginAttempts = 3;
+  lockoutMode = prefs.getString("valLockMd", "restart_or_1h");
+  if (lockoutMode != "restart_only")
+    lockoutMode = "restart_or_1h";
+  timeFormat = prefs.getString("tFmt", "24h");
+  if (timeFormat != "12h" && timeFormat != "24h")
+    timeFormat = "24h";
   lastSyncTimeStr = prefs.getString("lastSync", "");
   prefs.end();
 
@@ -912,11 +932,18 @@ void resetValidationToDefault() {
   loginEnabled = true;
   loginMode = "sessional";
   verifyEnabled = true;
+  maxLoginAttempts = 3;
+  lockoutMode = "restart_or_1h";
+  failedAttempts = 0;
+  isLockedOut = false;
+  lockoutStartMs = 0;
 
   prefs.begin("admin", false);
   prefs.putBool("valLogEn", true);
   prefs.putString("valLogMd", "sessional");
   prefs.putBool("valVerEn", true);
+  prefs.putInt("valMaxAtt", 3);
+  prefs.putString("valLockMd", "restart_or_1h");
   prefs.end();
 }
 
@@ -960,9 +987,11 @@ void resetNtpServerToDefault() {
 
 void resetTimezoneToDefault() {
   tzStr = DEFAULT_TIME_ZONE;
+  timeFormat = "24h";
   parseTZ();
   prefs.begin("admin", false);
   prefs.putString("tz", tzStr);
+  prefs.putString("tFmt", timeFormat);
   prefs.end();
 }
 
@@ -1166,9 +1195,77 @@ bool verifyAnyUser(const String &u, const String &p) {
   return verifyLogin(u, p, role);
 }
 
+void updateLockoutState() {
+  if (isLockedOut && lockoutMode == "restart_or_1h") {
+    if ((uint32_t)(millis() - lockoutStartMs) >= LOCKOUT_DURATION_MS) {
+      isLockedOut = false;
+      failedAttempts = 0;
+      lockoutStartMs = 0;
+    }
+  }
+}
+
+unsigned long getLockoutRemainingSec() {
+  updateLockoutState();
+  if (!isLockedOut || lockoutMode == "restart_only")
+    return 0;
+  uint32_t elapsed = (uint32_t)(millis() - lockoutStartMs);
+  if (elapsed >= LOCKOUT_DURATION_MS)
+    return 0;
+  return (LOCKOUT_DURATION_MS - elapsed + 999) / 1000;
+}
+
+void registerAuthAttempt(bool success) {
+  updateLockoutState();
+  if (success) {
+    failedAttempts = 0;
+    isLockedOut = false;
+    lockoutStartMs = 0;
+  } else {
+    failedAttempts++;
+    if (failedAttempts >= maxLoginAttempts) {
+      failedAttempts = maxLoginAttempts;
+      isLockedOut = true;
+      lockoutStartMs = millis();
+    }
+  }
+}
+
+void sendAuthFailureResponse(AsyncWebServerRequest *req, const String &baseError) {
+  updateLockoutState();
+  JsonDocument d;
+  d["ok"] = false;
+  d["failedAttempts"] = failedAttempts;
+  d["maxAttempts"] = maxLoginAttempts;
+  d["locked"] = isLockedOut;
+  d["lockoutMode"] = lockoutMode;
+  d["remainingSec"] = getLockoutRemainingSec();
+
+  if (isLockedOut) {
+    if (lockoutMode == "restart_only") {
+      d["error"] = "Max attempts (" + String(failedAttempts) + "/" + String(maxLoginAttempts) + ") reached. Device restart required!";
+    } else {
+      d["error"] = "Max attempts (" + String(failedAttempts) + "/" + String(maxLoginAttempts) + ") reached. Restart device or wait 1 hour.";
+    }
+  } else {
+    d["error"] = baseError + " (" + String(failedAttempts) + "/" + String(maxLoginAttempts) + " failed)";
+  }
+
+  AsyncResponseStream *response = req->beginResponseStream("application/json");
+  response->setCode(isLockedOut ? 429 : 403);
+  serializeJson(d, *response);
+  req->send(response);
+}
+
 bool requireUserVerification(AsyncWebServerRequest *req, bool forceAlways = false) {
   if (!forceAlways && !verifyEnabled) {
     return true;
+  }
+
+  updateLockoutState();
+  if (isLockedOut) {
+    sendAuthFailureResponse(req, "Device is locked");
+    return false;
   }
 
   if (!req->hasParam("adminUser", true) || !req->hasParam("adminPass", true)) {
@@ -1182,16 +1279,24 @@ bool requireUserVerification(AsyncWebServerRequest *req, bool forceAlways = fals
   if (!verifyAnyUser(user, pass)) {
     initDefaultUser();
     if (!verifyAnyUser(user, pass)) {
-      req->send(403, "application/json", "{\"error\":\"User verification failed\"}");
+      registerAuthAttempt(false);
+      sendAuthFailureResponse(req, "User verification failed");
       return false;
     }
   }
+  registerAuthAttempt(true);
   return true;
 }
 
-bool requireAdminVerification(AsyncWebServerRequest *req) {
-  if (!verifyEnabled) {
+bool requireAdminVerification(AsyncWebServerRequest *req, bool forceAlways = false) {
+  if (!forceAlways && !verifyEnabled) {
     return true;
+  }
+
+  updateLockoutState();
+  if (isLockedOut) {
+    sendAuthFailureResponse(req, "Device is locked");
+    return false;
   }
 
   if (!req->hasParam("adminUser", true) || !req->hasParam("adminPass", true)) {
@@ -1205,10 +1310,12 @@ bool requireAdminVerification(AsyncWebServerRequest *req) {
   if (!verifyAdmin(adminUser, adminPass)) {
     initDefaultUser();
     if (!verifyAdmin(adminUser, adminPass)) {
-      req->send(403, "application/json", "{\"error\":\"Admin verification failed\"}");
+      registerAuthAttempt(false);
+      sendAuthFailureResponse(req, "Admin verification failed");
       return false;
     }
   }
+  registerAuthAttempt(true);
   return true;
 }
 
@@ -2020,6 +2127,7 @@ void setupWebServer() {
   server.on("/api/dashboard", HTTP_GET, [](AsyncWebServerRequest *req) {
     JsonDocument d;
     d["timeSynced"] = timeSynced;
+    d["timeFormat"] = timeFormat;
     d["loginEnabled"] = loginEnabled;
     d["loginMode"] = loginMode;
     d["verifyEnabled"] = verifyEnabled;
@@ -2096,10 +2204,17 @@ void setupWebServer() {
     if (resetAdminRequested) {
       if (consumeBootButtonHoldForReset()) {
         resetAdminToFactoryDefault();
+        registerAuthAttempt(true);
         req->send(200, "application/json", "{\"ok\":true,\"resetAdmin\":true,\"msg\":\"Admin reset to default (esp / 456456).\"}");
       } else {
         req->send(400, "application/json", "{\"ok\":false,\"resetAdmin\":true,\"error\":\"Hold BOOT button for 5s first.\"}");
       }
+      return;
+    }
+
+    updateLockoutState();
+    if (isLockedOut) {
+      sendAuthFailureResponse(req, "Device is locked");
       return;
     }
 
@@ -2109,11 +2224,22 @@ void setupWebServer() {
     }
     String u = req->getParam("user", true)->value();
     String p = req->getParam("pass", true)->value();
+    bool reqAdmin = req->hasParam("requireAdmin", true) && req->getParam("requireAdmin", true)->value() == "true";
     String role;
-    if (verifyLogin(u, p, role))
-      req->send(200, "application/json", "{\"ok\":true,\"role\":\"" + role + "\"}");
-    else
-      req->send(401, "application/json", "{\"error\":\"Invalid credentials\"}");
+    bool valid = verifyLogin(u, p, role);
+    if (!valid) {
+      initDefaultUser();
+      valid = verifyLogin(u, p, role);
+    }
+
+    if (valid && (!reqAdmin || role == "admin")) {
+      registerAuthAttempt(true);
+      req->send(200, "application/json",
+                "{\"ok\":true,\"role\":\"" + role + "\",\"failedAttempts\":0,\"maxAttempts\":" + String(maxLoginAttempts) + ",\"locked\":false}");
+    } else {
+      registerAuthAttempt(false);
+      sendAuthFailureResponse(req, reqAdmin ? "Admin verification failed" : "Invalid credentials");
+    }
   });
 
   server.on("/api/switches", HTTP_GET, [](AsyncWebServerRequest *req) {
@@ -3010,6 +3136,7 @@ void setupWebServer() {
       JsonDocument d;
       d["mdns"] = mdnsName;
       d["defaultMdns"] = getDefaultMdnsName();
+      d["macMdns"] = getMacMdnsName();
       AsyncResponseStream *response = req->beginResponseStream("application/json");
       serializeJson(d, *response);
       req->send(response);
@@ -3113,6 +3240,7 @@ void setupWebServer() {
       JsonDocument d;
       d["ntp"] = ntpSrv;
       d["tz"] = tzStr;
+      d["timeFormat"] = timeFormat;
       d["synced"] = timeSynced;
       d["lastSynced"] = lastSyncTimeStr;
       AsyncResponseStream *response = req->beginResponseStream("application/json");
@@ -3127,9 +3255,16 @@ void setupWebServer() {
         tzStr = req->getParam("tz", true)->value();
         parseTZ();
       }
+      if (req->hasParam("timeFormat", true)) {
+        String tf = req->getParam("timeFormat", true)->value();
+        tf.trim();
+        tf.toLowerCase();
+        timeFormat = (tf == "12h") ? "12h" : "24h";
+      }
       prefs.begin("admin", false);
       prefs.putString("ntp", ntpSrv);
       prefs.putString("tz", tzStr);
+      prefs.putString("tFmt", timeFormat);
       prefs.end();
       notifyStorage();
       ntpResyncPending = true;
@@ -3144,9 +3279,16 @@ void setupWebServer() {
         tzStr = req->getParam("tz", true)->value();
         parseTZ();
       }
+      if (req->hasParam("timeFormat", true)) {
+        String tf = req->getParam("timeFormat", true)->value();
+        tf.trim();
+        tf.toLowerCase();
+        timeFormat = (tf == "12h") ? "12h" : "24h";
+      }
       prefs.begin("admin", false);
       prefs.putString("ntp", ntpSrv);
       prefs.putString("tz", tzStr);
+      prefs.putString("tFmt", timeFormat);
       prefs.end();
 
       bool ok = syncTime();
@@ -3222,10 +3364,16 @@ void setupWebServer() {
     });
 
     server.on("/api/admin/validation", HTTP_GET, [](AsyncWebServerRequest *req) {
+      updateLockoutState();
       JsonDocument d;
       d["loginEnabled"] = loginEnabled;
       d["loginMode"] = loginMode;
       d["verifyEnabled"] = verifyEnabled;
+      d["maxAttempts"] = maxLoginAttempts;
+      d["lockoutMode"] = lockoutMode;
+      d["failedAttempts"] = failedAttempts;
+      d["locked"] = isLockedOut;
+      d["remainingSec"] = getLockoutRemainingSec();
       AsyncResponseStream *response = req->beginResponseStream("application/json");
       serializeJson(d, *response);
       req->send(response);
@@ -3246,11 +3394,27 @@ void setupWebServer() {
       }
       if (req->hasParam("verifyEnabled", true))
         verifyEnabled = req->getParam("verifyEnabled", true)->value() == "true";
+      if (req->hasParam("maxAttempts", true)) {
+        int ma = req->getParam("maxAttempts", true)->value().toInt();
+        if (ma >= 1 && ma <= 5)
+          maxLoginAttempts = ma;
+      }
+      if (req->hasParam("lockoutMode", true)) {
+        String lm = req->getParam("lockoutMode", true)->value();
+        lm.trim();
+        lockoutMode = (lm == "restart_only") ? "restart_only" : "restart_or_1h";
+      }
+
+      failedAttempts = 0;
+      isLockedOut = false;
+      lockoutStartMs = 0;
 
       prefs.begin("admin", false);
       prefs.putBool("valLogEn", loginEnabled);
       prefs.putString("valLogMd", loginMode);
       prefs.putBool("valVerEn", verifyEnabled);
+      prefs.putInt("valMaxAtt", maxLoginAttempts);
+      prefs.putString("valLockMd", lockoutMode);
       prefs.end();
       notifyStorage();
 
@@ -3259,6 +3423,8 @@ void setupWebServer() {
       d["loginEnabled"] = loginEnabled;
       d["loginMode"] = loginMode;
       d["verifyEnabled"] = verifyEnabled;
+      d["maxAttempts"] = maxLoginAttempts;
+      d["lockoutMode"] = lockoutMode;
       AsyncResponseStream *response = req->beginResponseStream("application/json");
       serializeJson(d, *response);
       req->send(response);

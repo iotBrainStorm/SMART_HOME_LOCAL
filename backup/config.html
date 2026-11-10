@@ -2904,11 +2904,17 @@
           <div class="info-box">
             Configure the local network address (mDNS) to access your ESP32
             without an IP address. <br />You can access it at
-            <strong>http://livingroom.local</strong>
+            <strong>http://smarthome.local</strong>
           </div>
           <div class="setting-row">
             <div class="setting-info">
-              <div class="setting-label">Current mDNS Name</div>
+              <div class="setting-label">Default mDNS Addresses</div>
+              <div class="setting-sub" id="defaultMdnsList">Loading...</div>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Current Active mDNS</div>
               <div class="setting-sub" id="defaultMdnsName">Loading...</div>
             </div>
           </div>
@@ -3179,6 +3185,20 @@
               placeholder="NTP server address"
               style="max-width: 100%; font-family: monospace"
             />
+          </div>
+          <div
+            class="setting-row"
+            style="flex-direction: column; align-items: flex-start; gap: 10px"
+          >
+            <div class="setting-label">Home Screen Time Format</div>
+            <select
+              class="cfg-input"
+              id="timeFormatSelect"
+              style="max-width: 100%"
+            >
+              <option value="24h">24-Hour</option>
+              <option value="12h">12-Hour</option>
+            </select>
           </div>
           <div
             class="setting-row"
@@ -3485,6 +3505,47 @@
             </label>
           </div>
 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Max Login Attempts</div>
+              <div class="setting-sub">
+                Maximum wrong login or verification attempts allowed (1 to 5)
+              </div>
+            </div>
+            <select
+              class="cfg-input"
+              id="valMaxAttempts"
+              style="max-width: 120px"
+            >
+              <option value="1">1 Attempt</option>
+              <option value="2">2 Attempts</option>
+              <option value="3" selected>3 Attempts</option>
+              <option value="4">4 Attempts</option>
+              <option value="5">5 Attempts</option>
+            </select>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">After Max Login Attempts</div>
+              <div class="setting-sub">
+                Lockout behavior after reaching maximum failed attempts
+              </div>
+            </div>
+            <select
+              class="cfg-input"
+              id="valLockoutMode"
+              style="max-width: 240px"
+            >
+              <option value="restart_or_1h" selected>
+                Restart / 1 Hour (Default)
+              </option>
+              <option value="restart_only">
+                Restart Required (More Secure)
+              </option>
+            </select>
+          </div>
+
           <div style="margin-top: 16px; text-align: right">
             <button
               class="cfg-btn cfg-btn-primary"
@@ -3743,13 +3804,27 @@
           id="confirmPasswordInput"
           class="cfg-input"
           placeholder="Enter password"
-          style="width: 100%; margin-bottom: 18px"
+          style="width: 100%; margin-bottom: 12px"
         />
+        <div
+          id="passwordModalStatus"
+          style="
+            font-size: 0.78rem;
+            color: #f87171;
+            margin-bottom: 14px;
+            min-height: 18px;
+            line-height: 1.4;
+          "
+        ></div>
         <div class="modal-actions">
           <button class="modal-cancel" onclick="closePasswordModal()">
             Cancel
           </button>
-          <button class="modal-confirm" onclick="verifyPasswordAndExecute()">
+          <button
+            class="modal-confirm"
+            id="passwordModalConfirmBtn"
+            onclick="verifyPasswordAndExecute()"
+          >
             Confirm
           </button>
         </div>
@@ -6657,6 +6732,96 @@
         verifyEnabled: true,
       };
 
+      var passwordModal = document.getElementById("passwordModal");
+      var passwordModalMsg = document.getElementById("passwordModalMsg");
+      var passwordModalStatus = document.getElementById("passwordModalStatus");
+      var passwordModalConfirmBtn = document.getElementById(
+        "passwordModalConfirmBtn",
+      );
+      var confirmPasswordInput = document.getElementById(
+        "confirmPasswordInput",
+      );
+      var pendingPasswordAction = null;
+      var pendingActionData = null;
+      var pendingRequiresAdmin = false;
+      var verifyLockoutTimer = null;
+
+      var validationState = {
+        loginEnabled: true,
+        loginMode: "sessional",
+        verifyEnabled: true,
+        maxAttempts: 3,
+        lockoutMode: "restart_or_1h",
+      };
+
+      function formatVerifyCountdown(sec) {
+        var m = Math.floor(sec / 60);
+        var s = sec % 60;
+        return (
+          String(m).padStart(2, "0") + "m " + String(s).padStart(2, "0") + "s"
+        );
+      }
+
+      function renderVerifyModalStatus(info) {
+        if (verifyLockoutTimer) {
+          clearInterval(verifyLockoutTimer);
+          verifyLockoutTimer = null;
+        }
+        if (!passwordModalStatus || !info) return;
+
+        var failed = info.failedAttempts || 0;
+        var maxAtt = info.maxAttempts || validationState.maxAttempts || 3;
+        var locked = !!info.locked;
+        var mode = info.lockoutMode || validationState.lockoutMode;
+        var remSec = info.remainingSec || 0;
+
+        if (locked) {
+          if (passwordModalConfirmBtn) passwordModalConfirmBtn.disabled = true;
+          passwordModalStatus.style.color = "#f87171";
+          if (mode === "restart_only") {
+            passwordModalStatus.textContent =
+              "Locked (" +
+              failed +
+              "/" +
+              maxAtt +
+              " failed) — Device Restart Required!";
+          } else {
+            var tick = function () {
+              if (remSec <= 0) {
+                clearInterval(verifyLockoutTimer);
+                verifyLockoutTimer = null;
+                if (passwordModalConfirmBtn)
+                  passwordModalConfirmBtn.disabled = false;
+                passwordModalStatus.style.color = "#86efac";
+                passwordModalStatus.textContent =
+                  "Lockout expired. You can verify again.";
+                return;
+              }
+              passwordModalStatus.textContent =
+                "Locked (" +
+                failed +
+                "/" +
+                maxAtt +
+                " failed) — Restart or wait " +
+                formatVerifyCountdown(remSec);
+              remSec--;
+            };
+            tick();
+            verifyLockoutTimer = setInterval(tick, 1000);
+          }
+        } else if (failed > 0) {
+          if (passwordModalConfirmBtn) passwordModalConfirmBtn.disabled = false;
+          passwordModalStatus.style.color = "#f87171";
+          passwordModalStatus.textContent =
+            (info.error || "Verification failed") +
+            " — Remaining: " +
+            Math.max(0, maxAtt - failed);
+        } else {
+          if (passwordModalConfirmBtn) passwordModalConfirmBtn.disabled = false;
+          passwordModalStatus.textContent = "";
+        }
+      }
+
       function showPasswordModal(message, action, data, forceVerification) {
         if (!forceVerification && !validationState.verifyEnabled) {
           if (action) action(data, "", "");
@@ -6665,20 +6830,39 @@
         passwordModalMsg.textContent = message;
         pendingPasswordAction = action;
         pendingActionData = data;
+        pendingRequiresAdmin = /admin/i.test(message || "");
         var adminUserInput = document.getElementById("confirmAdminUser");
-        adminUserInput.placeholder = "User ID";
+        adminUserInput.placeholder = pendingRequiresAdmin
+          ? "Admin ID"
+          : "User ID";
         adminUserInput.value = sessionStorage.getItem("smartHomeUser") || "";
         confirmPasswordInput.value = "";
+        if (passwordModalStatus) passwordModalStatus.textContent = "";
+        if (passwordModalConfirmBtn) passwordModalConfirmBtn.disabled = false;
         passwordModal.classList.remove("hidden");
         confirmPasswordInput.focus();
+
+        // Fetch live failed/lockout status when modal opens
+        apiGet("/api/admin/validation")
+          .then(function (val) {
+            if (val && (val.locked || val.failedAttempts > 0)) {
+              renderVerifyModalStatus(val);
+            }
+          })
+          .catch(function () {});
       }
 
       function closePasswordModal() {
+        if (verifyLockoutTimer) {
+          clearInterval(verifyLockoutTimer);
+          verifyLockoutTimer = null;
+        }
         passwordModal.classList.add("hidden");
         pendingPasswordAction = null;
         pendingActionData = null;
         document.getElementById("confirmAdminUser").value = "";
         confirmPasswordInput.value = "";
+        if (passwordModalStatus) passwordModalStatus.textContent = "";
       }
 
       function verifyPasswordAndExecute() {
@@ -6689,13 +6873,48 @@
         var action = pendingPasswordAction;
         var actionData = pendingActionData;
         if (!adminUser || !adminPass) {
-          alert("Please enter admin username and password");
+          if (passwordModalStatus) {
+            passwordModalStatus.style.color = "#f87171";
+            passwordModalStatus.textContent =
+              "Please enter username and password";
+          }
           return;
         }
-        closePasswordModal();
-        if (action) {
-          action(actionData, adminUser, adminPass);
-        }
+
+        if (passwordModalConfirmBtn) passwordModalConfirmBtn.disabled = true;
+
+        apiPost(
+          "/api/login",
+          "user=" +
+            encodeURIComponent(adminUser) +
+            "&pass=" +
+            encodeURIComponent(adminPass) +
+            "&requireAdmin=" +
+            (pendingRequiresAdmin ? "true" : "false"),
+        )
+          .then(function (res) {
+            if (passwordModalConfirmBtn)
+              passwordModalConfirmBtn.disabled = false;
+            if (res && res.ok) {
+              closePasswordModal();
+              if (action) {
+                action(actionData, adminUser, adminPass);
+              }
+            } else {
+              confirmPasswordInput.value = "";
+              renderVerifyModalStatus(
+                res || { error: "Verification failed", failedAttempts: 1 },
+              );
+            }
+          })
+          .catch(function () {
+            if (passwordModalConfirmBtn)
+              passwordModalConfirmBtn.disabled = false;
+            if (passwordModalStatus) {
+              passwordModalStatus.style.color = "#f87171";
+              passwordModalStatus.textContent = "Connection error";
+            }
+          });
       }
 
       // Allow Enter key to submit
@@ -6991,32 +7210,48 @@
       function loadMdnsSettings() {
         apiGet("/api/admin/mdns")
           .then(function (d) {
+            var defaultListEl = document.getElementById("defaultMdnsList");
+            if (defaultListEl) {
+              var defMdns = (d && d.defaultMdns) || "smarthome";
+              var macMdns = (d && d.macMdns) || "";
+              var url1 = "http://" + defMdns + ".local";
+              var html =
+                '1. <a href="' +
+                url1 +
+                '" target="_blank" style="color: #60a5fa; text-decoration: underline;">' +
+                url1 +
+                "</a> (Default)";
+              if (macMdns) {
+                var url2 = "http://" + macMdns + ".local";
+                html +=
+                  '<br/>2. <a href="' +
+                  url2 +
+                  '" target="_blank" style="color: #60a5fa; text-decoration: underline;">' +
+                  url2 +
+                  "</a> (MAC)";
+              }
+              defaultListEl.innerHTML = html;
+            }
+
             var defaultEl = document.getElementById("defaultMdnsName");
             if (defaultEl) {
-              // Determine current mDNS (use custom if set, otherwise fallback to default)
               var currentMdns =
                 d && d.mdns
                   ? d.mdns
                   : d && d.defaultMdns
                     ? d.defaultMdns
-                    : null;
-
-              if (currentMdns) {
-                var url = "http://" + currentMdns + ".local";
-                // Inject a clickable anchor tag
-                defaultEl.innerHTML =
-                  '<a href="' +
-                  url +
-                  '" target="_blank" style="color: #60a5fa; text-decoration: underline;">' +
-                  url +
-                  "</a>";
-              } else {
-                defaultEl.textContent = "Unavailable";
-              }
+                    : "smarthome";
+              var url = "http://" + currentMdns + ".local";
+              defaultEl.innerHTML =
+                '<a href="' +
+                url +
+                '" target="_blank" style="color: #60a5fa; text-decoration: underline;">' +
+                url +
+                "</a>";
             }
             var input = document.getElementById("adminMdnsName");
             if (input) {
-              input.value = d && d.mdns ? d.mdns : d.defaultMdns || "";
+              input.value = d && d.mdns ? d.mdns : d.defaultMdns || "smarthome";
             }
           })
           .catch(function () {});
@@ -7779,6 +8014,10 @@
                 }
               }
             }
+            if (d.timeFormat) {
+              var tfSel = document.getElementById("timeFormatSelect");
+              if (tfSel) tfSel.value = d.timeFormat === "12h" ? "12h" : "24h";
+            }
             updateLastSyncedUi(d.lastSynced);
           })
           .catch(function () {});
@@ -7787,12 +8026,15 @@
       function saveTimeSettings() {
         var ntpServer = document.getElementById("ntpServer").value;
         var timezone = document.getElementById("timezoneSelect").value;
+        var timeFormat = document.getElementById("timeFormatSelect").value;
         apiPost(
           "/api/admin/time",
           "ntp=" +
             encodeURIComponent(ntpServer) +
             "&tz=" +
-            encodeURIComponent(timezone),
+            encodeURIComponent(timezone) +
+            "&timeFormat=" +
+            encodeURIComponent(timeFormat),
         )
           .then(function (d) {
             if (d.ok) {
@@ -7811,6 +8053,7 @@
         var btn = document.getElementById("syncTimeBtn");
         var ntpServer = document.getElementById("ntpServer").value;
         var timezone = document.getElementById("timezoneSelect").value;
+        var timeFormat = document.getElementById("timeFormatSelect").value;
         if (btn) {
           btn.disabled = true;
           btn.textContent = "Syncing...";
@@ -7820,7 +8063,9 @@
           "ntp=" +
             encodeURIComponent(ntpServer) +
             "&tz=" +
-            encodeURIComponent(timezone),
+            encodeURIComponent(timezone) +
+            "&timeFormat=" +
+            encodeURIComponent(timeFormat),
         )
           .then(function (d) {
             if (d && d.lastSynced) {
@@ -7860,13 +8105,23 @@
             validationState.loginMode =
               d.loginMode === "everytime" ? "everytime" : "sessional";
             validationState.verifyEnabled = d.verifyEnabled !== false;
+            validationState.maxAttempts = d.maxAttempts || 3;
+            validationState.lockoutMode =
+              d.lockoutMode === "restart_only"
+                ? "restart_only"
+                : "restart_or_1h";
 
             var loginEl = document.getElementById("valLoginEnable");
             var modeEl = document.getElementById("valLoginMode");
             var verifyEl = document.getElementById("valVerifyEnable");
+            var maxAttEl = document.getElementById("valMaxAttempts");
+            var lockMdEl = document.getElementById("valLockoutMode");
+
             if (loginEl) loginEl.checked = validationState.loginEnabled;
             if (modeEl) modeEl.value = validationState.loginMode;
             if (verifyEl) verifyEl.checked = validationState.verifyEnabled;
+            if (maxAttEl) maxAttEl.value = String(validationState.maxAttempts);
+            if (lockMdEl) lockMdEl.value = validationState.lockoutMode;
             toggleValidationLoginMode();
           })
           .catch(function () {});
@@ -7876,6 +8131,8 @@
         var loginEn = document.getElementById("valLoginEnable").checked;
         var loginMd = document.getElementById("valLoginMode").value;
         var verifyEn = document.getElementById("valVerifyEnable").checked;
+        var maxAtt = document.getElementById("valMaxAttempts").value;
+        var lockMd = document.getElementById("valLockoutMode").value;
 
         // Always require User Verification (forceVerification = true)
         showPasswordModal(
@@ -7889,7 +8146,11 @@
                   "&loginMode=" +
                   encodeURIComponent(loginMd) +
                   "&verifyEnabled=" +
-                  verifyEn,
+                  verifyEn +
+                  "&maxAttempts=" +
+                  encodeURIComponent(maxAtt) +
+                  "&lockoutMode=" +
+                  encodeURIComponent(lockMd),
                 user,
                 pass,
               ),
@@ -7899,6 +8160,9 @@
                   validationState.loginEnabled = d.loginEnabled !== false;
                   validationState.loginMode = d.loginMode || "sessional";
                   validationState.verifyEnabled = d.verifyEnabled !== false;
+                  validationState.maxAttempts = d.maxAttempts || 3;
+                  validationState.lockoutMode =
+                    d.lockoutMode || "restart_or_1h";
                   alert("Validation settings saved successfully!");
                 } else {
                   alert((d && d.error) || "Failed to save validation settings");

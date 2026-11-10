@@ -435,15 +435,21 @@
 
       /* ── DateTime ── */
       .datetime {
-        text-align: center;
+        display: flex;
+        justify-content: center;
+        align-items: center;
         padding: 10px 0 24px;
         color: #64748b;
         font-size: 0.82rem;
         font-weight: 500;
         letter-spacing: 0.5px;
-        white-space: nowrap;
+        white-space: pre;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+
+      .datetime.split {
+        justify-content: space-between;
       }
 
       /* ── Cards ── */
@@ -959,7 +965,10 @@
         </div>
       </div>
 
-      <div class="datetime" id="datetime"></div>
+      <div class="datetime" id="datetime">
+        <span id="dtLeft"></span>
+        <span id="dtRight"></span>
+      </div>
 
       <div class="cards">
         <!-- Card 0: Living Room -->
@@ -1329,6 +1338,8 @@
         return new Date(utcMs + deviceTimezoneOffsetMinutes * 60000);
       }
 
+      var deviceTimeFormat = "24h";
+
       function loadDeviceTimezone() {
         return fetch("/api/admin/time", { cache: "no-store" })
           .then(function (r) {
@@ -1340,6 +1351,9 @@
             if (parsedOffset !== null) {
               deviceTimezoneOffsetMinutes = parsedOffset;
               deviceTimezoneLabel = tzValue;
+            }
+            if (d && d.timeFormat) {
+              deviceTimeFormat = d.timeFormat === "12h" ? "12h" : "24h";
             }
             updateClock();
           })
@@ -1357,25 +1371,59 @@
 
       function updateClock() {
         var now = getDeviceTimezoneDate();
-        var h = String(now.getHours()).padStart(2, "0");
+        var rawHours = now.getHours();
+        var ampm = "";
+        var displayHours = rawHours;
+
+        if (deviceTimeFormat === "12h") {
+          ampm = rawHours >= 12 ? " PM" : " AM";
+          displayHours = rawHours % 12;
+          if (displayHours === 0) displayHours = 12;
+        }
+
+        var h = String(displayHours).padStart(2, "0");
         var m = String(now.getMinutes()).padStart(2, "0");
         var s = String(now.getSeconds()).padStart(2, "0");
         var d = now.getDate();
         var mon = months[now.getMonth()];
         var y = now.getFullYear();
 
-        var baseStr = d + " " + mon + " " + y + " | " + h + ":" + m + ":" + s;
+        var sep = "\u00A0\u00A0\u00A0"; // 3 blank spaces
+        var dateTimeStr =
+          d + " " + mon + " " + y + sep + h + ":" + m + ":" + s + ampm;
 
+        var envParts = [];
         if (envData.showTemp && envData.temp !== null) {
-          baseStr +=
-            " | " + Number(envData.temp).toFixed(envData.tempPrec) + "°C";
+          envParts.push(Number(envData.temp).toFixed(envData.tempPrec) + "°C");
         }
         if (envData.showHumid && envData.humid !== null) {
-          baseStr +=
-            " | " + Number(envData.humid).toFixed(envData.humidPrec) + "%";
+          envParts.push(Number(envData.humid).toFixed(envData.humidPrec) + "%");
         }
 
-        document.getElementById("datetime").textContent = baseStr;
+        var dtContainer = document.getElementById("datetime");
+        var dtLeft = document.getElementById("dtLeft");
+        var dtRight = document.getElementById("dtRight");
+
+        // If temperature or humidity is disabled, center Date & Time in middle;
+        // when both are enabled, place Date & Time at left and Temp & Humidity at right.
+        var bothEnabled =
+          envData.showTemp &&
+          envData.temp !== null &&
+          envData.showHumid &&
+          envData.humid !== null;
+
+        if (envParts.length > 0) {
+          dtContainer.classList.add("split");
+          dtLeft.textContent = dateTimeStr;
+          dtRight.textContent = envParts.join(sep);
+        } else {
+          dtContainer.classList.remove("split");
+          dtLeft.textContent =
+            envParts.length > 0
+              ? dateTimeStr + sep + envParts.join(sep)
+              : dateTimeStr;
+          dtRight.textContent = "";
+        }
       }
 
       function normalizeIconName(iconName) {
@@ -1476,6 +1524,14 @@
           })
           .then(function (data) {
             if (!data) return;
+
+            var logoutBtn = document.getElementById("logoutBtn");
+            if (logoutBtn && data.loginEnabled !== undefined) {
+              logoutBtn.style.display = data.loginEnabled ? "" : "none";
+            }
+            if (data.timeFormat) {
+              deviceTimeFormat = data.timeFormat === "12h" ? "12h" : "24h";
+            }
 
             envData.showTemp = !!data.showTemp;
             envData.showHumid = !!data.showHumid;
@@ -1640,6 +1696,76 @@
           });
         });
 
+      var loginLockoutTimer = null;
+
+      function formatCountdown(sec) {
+        var m = Math.floor(sec / 60);
+        var s = sec % 60;
+        return (
+          String(m).padStart(2, "0") + "m " + String(s).padStart(2, "0") + "s"
+        );
+      }
+
+      function renderLoginAttemptStatus(info) {
+        if (loginLockoutTimer) {
+          clearInterval(loginLockoutTimer);
+          loginLockoutTimer = null;
+        }
+        if (!info) return;
+
+        var failed = info.failedAttempts || 0;
+        var maxAtt = info.maxAttempts || 3;
+        var locked = !!info.locked;
+        var mode = info.lockoutMode || "restart_or_1h";
+        var remSec = info.remainingSec || 0;
+
+        if (locked) {
+          loginBtn.disabled = true;
+          loginError.style.color = "#f87171";
+          if (mode === "restart_only") {
+            loginBtn.textContent = "LOCKED (RESTART REQUIRED)";
+            loginError.textContent =
+              "Failed Attempts: " +
+              failed +
+              "/" +
+              maxAtt +
+              " — Device restart required to unlock!";
+          } else {
+            var tick = function () {
+              if (remSec <= 0) {
+                clearInterval(loginLockoutTimer);
+                loginLockoutTimer = null;
+                loginBtn.disabled = false;
+                loginBtn.textContent = "SIGN IN";
+                loginError.style.color = "#86efac";
+                loginError.textContent =
+                  "Lockout expired. You can try signing in again.";
+                return;
+              }
+              loginBtn.textContent = "LOCKED (" + formatCountdown(remSec) + ")";
+              loginError.textContent =
+                "Failed Attempts: " +
+                failed +
+                "/" +
+                maxAtt +
+                " — Restart device or wait " +
+                formatCountdown(remSec);
+              remSec--;
+            };
+            tick();
+            loginLockoutTimer = setInterval(tick, 1000);
+          }
+        } else if (failed > 0) {
+          loginBtn.disabled = false;
+          loginBtn.textContent = "SIGN IN";
+          loginError.style.color = "#f87171";
+          loginError.textContent =
+            (info.error || "Invalid credentials") +
+            " — Remaining attempts: " +
+            Math.max(0, maxAtt - failed);
+        }
+      }
+
       /* ── Login via API ── */
       function submitLoginRequest(u, p, resetAdminRequested) {
         fetch("/api/login", {
@@ -1691,8 +1817,16 @@
               loadSwitches();
               loadAutomationFeatureIndicators();
             } else {
-              loginError.textContent = res.data.error || "Invalid credentials";
               loginPassInput.value = "";
+              if (
+                res.data &&
+                (res.data.locked || res.data.failedAttempts !== undefined)
+              ) {
+                renderLoginAttemptStatus(res.data);
+              } else {
+                loginError.textContent =
+                  (res.data && res.data.error) || "Invalid credentials";
+              }
             }
           })
           .catch(function () {
@@ -1777,6 +1911,17 @@
             var loginEnabled = !val || val.loginEnabled !== false;
             var loginMode =
               val && val.loginMode === "everytime" ? "everytime" : "sessional";
+
+            // Hide logout button when User Login is OFF
+            var logoutBtn = document.getElementById("logoutBtn");
+            if (logoutBtn) {
+              logoutBtn.style.display = loginEnabled ? "" : "none";
+            }
+
+            // Show live failed/lockout status in login modal if any
+            if (val && (val.locked || val.failedAttempts > 0)) {
+              renderLoginAttemptStatus(val);
+            }
 
             // 1. Login disabled -> go straight to dashboard
             if (!loginEnabled) {
