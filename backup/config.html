@@ -2903,7 +2903,10 @@
           <div class="panel-title">mDNS Setup</div>
           <div class="info-box">
             Configure the local network address (mDNS) to access your ESP32
-            without an IP address. <br />You can access it at
+            without an IP address. It is recommended to change this mdns address
+            with unique trailing MAC or any custom address to avoid mdns
+            conflicts when you use many devices with same router. <br />You can
+            access it at
             <strong>http://smarthome.local</strong>
           </div>
           <div class="setting-row">
@@ -8976,23 +8979,39 @@
           : null;
         if (relayBtn) {
           relayBtn.addEventListener("click", function () {
+            var nextModes = [];
             var body = "";
             for (var i = 0; i < 4; i++) {
               var checked = document.querySelector(
                 'input[name="relay-state-' + i + '"]:checked',
               );
-              relayModesState[i] = checked ? checked.value : "off";
+              nextModes[i] = checked ? checked.value : "off";
               if (i > 0) body += "&";
-              body += "relay" + i + "=" + relayModesState[i];
+              body += "relay" + i + "=" + nextModes[i];
             }
-            apiPost("/api/switches/relay", body)
-              .then(function (d) {
-                if (d.ok) alert("Relay settings saved!");
-                else alert(d.error || "Save failed");
-              })
-              .catch(function () {
-                alert("Connection error");
-              });
+            showPasswordModal(
+              "Enter user credentials to save relay holding state",
+              function (data, user, pass) {
+                apiPost(
+                  "/api/switches/relay",
+                  appendAdminCredentials(body, user, pass),
+                )
+                  .then(function (d) {
+                    if (d.ok) {
+                      for (var i = 0; i < 4; i++) {
+                        relayModesState[i] = nextModes[i];
+                      }
+                      refreshSwitchSettingsUi();
+                      alert("Relay settings saved!");
+                    } else {
+                      alert(d.error || "Save failed");
+                    }
+                  })
+                  .catch(function () {
+                    alert("Connection error");
+                  });
+              },
+            );
           });
         }
 

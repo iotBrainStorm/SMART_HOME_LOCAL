@@ -1476,6 +1476,8 @@ void sntpTimeAvailableCallback(struct timeval *t) {
   timeSynced = true;
   sunCalcPending = true; // Handled safely inside loop()
   syncTimestampPending = true;
+  lastCheckedMinute = -1;
+  lastSchedCheck = 0;
 }
 
 bool syncTime(struct tm *syncedTime = nullptr) {
@@ -1771,6 +1773,7 @@ void checkSchedules() {
   String today = dn[ti.tm_wday];
 
   for (int sw = 0; sw < NUM_SWITCHES; sw++) {
+    // 1. RECURRING SCHEDULES
     localPrefs.begin("sched", true);
     String sj = localPrefs.getString(("s" + String(sw)).c_str(), "[]");
     localPrefs.end();
@@ -1797,16 +1800,22 @@ void checkSchedules() {
 
         String action = getScheduleActionValue(o, "on");
         int fromMin = parseClockMinutes(getRecurringStartTime(o));
-        if (fromMin >= 0 && curMin == fromMin)
-          queueAutomationAction(sw, action == "on", AUTOMATION_SCHEDULE);
-
         int toMin = parseClockMinutes(getRecurringEndTime(o));
-        if (toMin >= 0 && curMin == toMin)
+
+        // Active anywhere inside [fromMin, toMin) — works mid-window & after power cuts
+        if (fromMin >= 0 && toMin > fromMin && curMin >= fromMin && curMin < toMin) {
+          queueAutomationAction(sw, action == "on", AUTOMATION_SCHEDULE);
+        }
+
+        // End of schedule window
+        if (toMin >= 0 && curMin == toMin) {
           queueAutomationAction(sw, action != "on", AUTOMATION_SCHEDULE);
+        }
       }
       sd.clear();
     }
 
+    // 2. FUTURE SCHEDULES
     localPrefs.begin("fsched", false);
     String fj = localPrefs.getString(("f" + String(sw)).c_str(), "[]");
 
@@ -1820,13 +1829,27 @@ void checkSchedules() {
 
       char ds[11];
       sprintf(ds, "%04d-%02d-%02d", ti.tm_year + 1900, ti.tm_mon + 1, ti.tm_mday);
+      String todayDateStr = String(ds);
       JsonArray fa = fd.as<JsonArray>();
       bool mod = false;
+
       for (int x = fa.size() - 1; x >= 0; x--) {
         JsonObject fo = fa[x];
         if (!fo["enabled"].as<bool>())
           continue;
-        if (fo["date"].as<String>() != String(ds))
+
+        String schedDate = fo["date"].as<String>();
+
+        // If the future schedule date has already passed during a long power cut, revert & remove it
+        if (schedDate < todayDateStr) {
+          String action = getScheduleActionValue(fo, "on");
+          queueAutomationAction(sw, action != "on", AUTOMATION_FUTURE_SCHEDULE);
+          fa.remove(x);
+          mod = true;
+          continue;
+        }
+
+        if (schedDate != todayDateStr)
           continue;
 
         String action = getScheduleActionValue(fo, "on");
@@ -1834,15 +1857,22 @@ void checkSchedules() {
         int toMin = parseClockMinutes(getFutureEndTime(fo));
         bool removeEntry = false;
 
-        if (fromMin >= 0 && curMin == fromMin) {
-          queueAutomationAction(sw, action == "on", AUTOMATION_FUTURE_SCHEDULE);
-          if (toMin < 0)
+        if (toMin < 0) {
+          // Legacy one-shot future schedule
+          if (fromMin >= 0 && curMin >= fromMin) {
+            queueAutomationAction(sw, action == "on", AUTOMATION_FUTURE_SCHEDULE);
             removeEntry = true;
-        }
-
-        if (toMin >= 0 && curMin == toMin) {
-          queueAutomationAction(sw, action != "on", AUTOMATION_FUTURE_SCHEDULE);
-          removeEntry = true;
+          }
+        } else {
+          // Active anywhere inside [fromMin, toMin) — works if saved mid-window or after power cut
+          if (fromMin >= 0 && curMin >= fromMin && curMin < toMin) {
+            queueAutomationAction(sw, action == "on", AUTOMATION_FUTURE_SCHEDULE);
+          }
+          // End of window (or if power came back right after toMin)
+          if (curMin >= toMin) {
+            queueAutomationAction(sw, action != "on", AUTOMATION_FUTURE_SCHEDULE);
+            removeEntry = true;
+          }
         }
 
         if (removeEntry) {
@@ -2028,11 +2058,8 @@ void checkPhysicalSwitches() {
     }
     if ((now - lastDbMs[i]) >= DB_DELAY && reading != lastInState[i]) {
       lastInState[i] = reading;
-      // For push-buttons: triggers on press (LOW).
-      // For latching wall rocker switches: remove 'if (reading == LOW)' so both flips toggle!
-      if (reading == LOW) {
-        setRelayState(i, !readSwState(i), "physical");
-      }
+      setRelayState(i, !readSwState(i), "physical");  // 2-Way Toggle on Every Flip (HIGH->LOW or LOW->HIGH toggles the relay)
+      // setRelayState(i, (reading == HIGH), "physical"); // Fixed Position Sync With 10k pull-down: HIGH means wall switch is ON, LOW means wall switch is OFF
     }
   }
 }
@@ -2305,6 +2332,8 @@ void setupWebServer() {
   });
 
   server.on("/api/switches/relay", HTTP_POST, [](AsyncWebServerRequest *req) {
+    if (!requireUserVerification(req))
+      return;
     prefs.begin("sw", false);
     for (int i = 0; i < NUM_SWITCHES; i++) {
       String k = "relay" + String(i);
@@ -2528,6 +2557,8 @@ void setupWebServer() {
       prefs.putString(("s" + String(sw)).c_str(), data);
       prefs.end();
       notifyStorage();
+      lastCheckedMinute = -1;
+      lastSchedCheck = 0;
       req->send(200, "application/json", "{\"ok\":true}");
     });
 
@@ -2565,6 +2596,8 @@ void setupWebServer() {
       prefs.putString(("f" + String(sw)).c_str(), data);
       prefs.end();
       notifyStorage();
+      lastCheckedMinute = -1;
+      lastSchedCheck = 0;
       req->send(200, "application/json", "{\"ok\":true}");
     });
 
