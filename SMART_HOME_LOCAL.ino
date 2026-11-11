@@ -68,12 +68,20 @@ volatile bool pendingWebServerRestart = false;
 bool swState[NUM_SWITCHES] = {false, false, false, false};
 String swName[NUM_SWITCHES] = {"DEVICE-1", "DEVICE-2", "DEVICE-3", "DEVICE-4"};
 String swIcon[NUM_SWITCHES] = {"home", "home", "home", "home"};
+
 enum RelayModeType : uint8_t {
   RELAY_MODE_OFF = 0,
   RELAY_MODE_ON = 1,
   RELAY_MODE_REMEMBER = 2
 };
 RelayModeType relayMode[NUM_SWITCHES] = {RELAY_MODE_OFF, RELAY_MODE_OFF, RELAY_MODE_OFF, RELAY_MODE_OFF};
+
+enum SwActionModeType : uint8_t {
+  SW_ACTION_TOGGLE = 0, // Toggle on Every Flip (Default)
+  SW_ACTION_SYNC = 1    // Fixed Position Sync
+};
+SwActionModeType swActionMode[NUM_SWITCHES] = {
+    SW_ACTION_TOGGLE, SW_ACTION_TOGGLE, SW_ACTION_TOGGLE, SW_ACTION_TOGGLE};
 
 bool nvsRelayDirty[NUM_SWITCHES] = {false, false, false, false};
 
@@ -270,6 +278,13 @@ void loadSwitchSettings() {
       relayMode[i] = RELAY_MODE_REMEMBER;
     } else {
       relayMode[i] = RELAY_MODE_OFF;
+    }
+
+    String actModeStr = localPrefs.getString(("m" + String(i)).c_str(), "toggle");
+    if (actModeStr == "sync") {
+      swActionMode[i] = SW_ACTION_SYNC;
+    } else {
+      swActionMode[i] = SW_ACTION_TOGGLE;
     }
 
     bool initialState = false;
@@ -951,9 +966,11 @@ void resetRelayStatesToDefault() {
   prefs.begin("sw", false);
   for (int i = 0; i < NUM_SWITCHES; i++) {
     relayMode[i] = RELAY_MODE_OFF;
+    swActionMode[i] = SW_ACTION_TOGGLE;
     writeSwState(i, false);
     digitalWrite(outPin[i], LOW);
     prefs.putString(("r" + String(i)).c_str(), "off");
+    prefs.putString(("m" + String(i)).c_str(), "toggle");
     prefs.remove(("l" + String(i)).c_str());
   }
   prefs.end();
@@ -2058,8 +2075,13 @@ void checkPhysicalSwitches() {
     }
     if ((now - lastDbMs[i]) >= DB_DELAY && reading != lastInState[i]) {
       lastInState[i] = reading;
-      setRelayState(i, !readSwState(i), "physical");  // 2-Way Toggle on Every Flip (HIGH->LOW or LOW->HIGH toggles the relay)
-      // setRelayState(i, (reading == HIGH), "physical"); // Fixed Position Sync With 10k pull-down: HIGH means wall switch is ON, LOW means wall switch is OFF
+      if (swActionMode[i] == SW_ACTION_SYNC) {
+        // Fixed Position Sync (10k pull-down: HIGH = Wall Switch ON, LOW = Wall Switch OFF)
+        setRelayState(i, (reading == HIGH), "physical");
+      } else {
+        // Toggle on Every Flip (Default: both HIGH->LOW and LOW->HIGH toggle the relay)
+        setRelayState(i, !readSwState(i), "physical");
+      }
     }
   }
 }
@@ -2275,6 +2297,7 @@ void setupWebServer() {
     JsonArray ic = d["icons"].to<JsonArray>();
     JsonArray st = d["states"].to<JsonArray>();
     JsonArray rl = d["relays"].to<JsonArray>();
+    JsonArray md = d["modes"].to<JsonArray>();
     for (int i = 0; i < NUM_SWITCHES; i++) {
       na.add(swName[i]);
       ic.add(swIcon[i]);
@@ -2285,6 +2308,8 @@ void setupWebServer() {
         rl.add("remember");
       else
         rl.add("off");
+
+      md.add(swActionMode[i] == SW_ACTION_SYNC ? "sync" : "toggle");
     }
     // DIRECT ASYNC STREAM
     AsyncResponseStream *response = req->beginResponseStream("application/json");
@@ -2346,6 +2371,20 @@ void setupWebServer() {
           relayMode[i] = RELAY_MODE_REMEMBER;
         else
           relayMode[i] = RELAY_MODE_OFF;
+      }
+
+      String mk = "mode" + String(i);
+      if (req->hasParam(mk, true)) {
+        String actStr = req->getParam(mk, true)->value();
+        actStr.trim();
+        actStr.toLowerCase();
+        if (actStr == "sync") {
+          swActionMode[i] = SW_ACTION_SYNC;
+          prefs.putString(("m" + String(i)).c_str(), "sync");
+        } else {
+          swActionMode[i] = SW_ACTION_TOGGLE;
+          prefs.putString(("m" + String(i)).c_str(), "toggle");
+        }
       }
     }
     prefs.end();

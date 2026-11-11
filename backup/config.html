@@ -1582,10 +1582,12 @@
 
         <!-- Relay Holding State -->
         <div class="panel" id="panel-sw-relay">
-          <div class="panel-title">Relay Holding State</div>
+          <div class="panel-title">Relay Holding State & Switch Mode</div>
           <div class="info-box">
-            <strong>Relay Holding State</strong> — Configure the default state
-            of each relay when the device powers on or restarts.
+            <strong>Relay Holding State & Action Mode</strong> — Configure the
+            default state of each relay at startup and how each physical wall
+            switch operates. Set all the GPIOs for physical switches as
+            <strong>10k PULL-DOWN to GND</strong>
           </div>
 
           <!-- Switch 1 -->
@@ -1597,7 +1599,13 @@
             <div class="setting-label relay-switch-label">
               Switch 1 — Living Room
             </div>
-            <div class="radio-group" data-switch="0">
+            <div
+              class="setting-sub"
+              style="margin-top: -6px; color: #60a5fa; font-weight: 600"
+            >
+              Startup Relay Holding State
+            </div>
+            <div class="radio-group" data-switch="0" style="width: 100%">
               <label class="radio-option selected">
                 <input type="radio" name="relay-state-0" value="off" checked />
                 <div>
@@ -1628,6 +1636,40 @@
                 </div>
               </label>
             </div>
+
+            <div
+              class="setting-sub"
+              style="margin-top: 6px; color: #60a5fa; font-weight: 600"
+            >
+              Physical Switch Action Mode
+            </div>
+            <div class="radio-group" data-switch-mode="0" style="width: 100%">
+              <label class="radio-option selected">
+                <input
+                  type="radio"
+                  name="switch-mode-0"
+                  value="toggle"
+                  checked
+                />
+                <div>
+                  <div class="radio-option-label">
+                    Toggle on Every Flip (Default)
+                  </div>
+                  <div class="radio-option-desc">
+                    Toggle the relay when HIGH to LOW or LOW to HIGH
+                  </div>
+                </div>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="switch-mode-0" value="sync" />
+                <div>
+                  <div class="radio-option-label">Fixed Position Sync</div>
+                  <div class="radio-option-desc">
+                    HIGH = Wall Switch ON and LOW = Wall Switch OFF
+                  </div>
+                </div>
+              </label>
+            </div>
           </div>
 
           <!-- Switch 2 -->
@@ -1644,7 +1686,13 @@
             <div class="setting-label relay-switch-label">
               Switch 2 — Bedroom
             </div>
-            <div class="radio-group" data-switch="1">
+            <div
+              class="setting-sub"
+              style="margin-top: -6px; color: #60a5fa; font-weight: 600"
+            >
+              Startup Relay Holding State
+            </div>
+            <div class="radio-group" data-switch="1" style="width: 100%">
               <label class="radio-option selected">
                 <input type="radio" name="relay-state-1" value="off" checked />
                 <div>
@@ -1675,6 +1723,40 @@
                 </div>
               </label>
             </div>
+
+            <div
+              class="setting-sub"
+              style="margin-top: 6px; color: #60a5fa; font-weight: 600"
+            >
+              Physical Switch Action Mode
+            </div>
+            <div class="radio-group" data-switch-mode="1" style="width: 100%">
+              <label class="radio-option selected">
+                <input
+                  type="radio"
+                  name="switch-mode-1"
+                  value="toggle"
+                  checked
+                />
+                <div>
+                  <div class="radio-option-label">
+                    Toggle on Every Flip (Default)
+                  </div>
+                  <div class="radio-option-desc">
+                    Toggle the relay when HIGH to LOW or LOW to HIGH
+                  </div>
+                </div>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="switch-mode-1" value="sync" />
+                <div>
+                  <div class="radio-option-label">Fixed Position Sync</div>
+                  <div class="radio-option-desc">
+                    HIGH = Wall Switch ON and LOW = Wall Switch OFF
+                  </div>
+                </div>
+              </label>
+            </div>
           </div>
 
           <!-- Switch 3 -->
@@ -1691,7 +1773,13 @@
             <div class="setting-label relay-switch-label">
               Switch 3 — Kitchen
             </div>
-            <div class="radio-group" data-switch="2">
+            <div
+              class="setting-sub"
+              style="margin-top: -6px; color: #60a5fa; font-weight: 600"
+            >
+              Startup Relay Holding State
+            </div>
+            <div class="radio-group" data-switch="2" style="width: 100%">
               <label class="radio-option selected">
                 <input type="radio" name="relay-state-2" value="off" checked />
                 <div>
@@ -1722,6 +1810,40 @@
                 </div>
               </label>
             </div>
+
+            <div
+              class="setting-sub"
+              style="margin-top: 6px; color: #60a5fa; font-weight: 600"
+            >
+              Physical Switch Action Mode
+            </div>
+            <div class="radio-group" data-switch-mode="2" style="width: 100%">
+              <label class="radio-option selected">
+                <input
+                  type="radio"
+                  name="switch-mode-2"
+                  value="toggle"
+                  checked
+                />
+                <div>
+                  <div class="radio-option-label">
+                    Toggle on Every Flip (Default)
+                  </div>
+                  <div class="radio-option-desc">
+                    Toggle the relay when HIGH to LOW or LOW to HIGH
+                  </div>
+                </div>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="switch-mode-2" value="sync" />
+                <div>
+                  <div class="radio-option-label">Fixed Position Sync</div>
+                  <div class="radio-option-desc">
+                    HIGH = Wall Switch ON and LOW = Wall Switch OFF
+                  </div>
+                </div>
+              </label>
+            </div>
           </div>
 
           <!-- Switch 4 -->
@@ -1738,7 +1860,13 @@
             <div class="setting-label relay-switch-label">
               Switch 4 — Bathroom
             </div>
-            <div class="radio-group" data-switch="3">
+            <div
+              class="setting-sub"
+              style="margin-top: -6px; color: #60a5fa; font-weight: 600"
+            >
+              Startup Relay Holding State
+            </div>
+            <div class="radio-group" data-switch="3" style="width: 100%">
               <label class="radio-option selected">
                 <input type="radio" name="relay-state-3" value="off" checked />
                 <div>
@@ -1765,6 +1893,40 @@
                   </div>
                   <div class="radio-option-desc">
                     Relay will restore its last known state
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            <div
+              class="setting-sub"
+              style="margin-top: 6px; color: #60a5fa; font-weight: 600"
+            >
+              Physical Switch Action Mode
+            </div>
+            <div class="radio-group" data-switch-mode="3" style="width: 100%">
+              <label class="radio-option selected">
+                <input
+                  type="radio"
+                  name="switch-mode-3"
+                  value="toggle"
+                  checked
+                />
+                <div>
+                  <div class="radio-option-label">
+                    Toggle on Every Flip (Default)
+                  </div>
+                  <div class="radio-option-desc">
+                    Toggle the relay when HIGH to LOW or LOW to HIGH
+                  </div>
+                </div>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="switch-mode-3" value="sync" />
+                <div>
+                  <div class="radio-option-label">Fixed Position Sync</div>
+                  <div class="radio-option-desc">
+                    HIGH = Wall Switch ON and LOW = Wall Switch OFF
                   </div>
                 </div>
               </label>
@@ -2905,9 +3067,7 @@
             Configure the local network address (mDNS) to access your ESP32
             without an IP address. It is recommended to change this mdns address
             with unique trailing MAC or any custom address to avoid mdns
-            conflicts when you use many devices with same router. <br />You can
-            access it at
-            <strong>http://smarthome.local</strong>
+            conflicts when you use many devices with same router.
           </div>
           <div class="setting-row">
             <div class="setting-info">
@@ -4689,6 +4849,7 @@
       var switchNamesState = ["DEVICE-1", "DEVICE-2", "DEVICE-3", "DEVICE-4"];
       var switchIconsState = ["home", "home", "home", "home"];
       var relayModesState = ["off", "off", "off", "off"];
+      var switchActionModesState = ["toggle", "toggle", "toggle", "toggle"];
       var iconPickerModal = document.getElementById("iconPickerModal");
       var currentIconSwitch = 0;
       var selectedIcon = null;
@@ -4786,6 +4947,27 @@
               });
             }
             radio.closest(".radio-option").classList.add("selected");
+          }
+
+          var actionModeValue = switchActionModesState[i] || "toggle";
+          var modeRadio = document.querySelector(
+            'input[name="switch-mode-' +
+              i +
+              '"][value="' +
+              actionModeValue +
+              '"]',
+          );
+          if (modeRadio) {
+            modeRadio.checked = true;
+            var modeGroup = modeRadio.closest(".radio-group");
+            if (modeGroup) {
+              modeGroup
+                .querySelectorAll(".radio-option")
+                .forEach(function (opt) {
+                  opt.classList.remove("selected");
+                });
+            }
+            modeRadio.closest(".radio-option").classList.add("selected");
           }
         }
 
@@ -7219,19 +7401,15 @@
               var macMdns = (d && d.macMdns) || "";
               var url1 = "http://" + defMdns + ".local";
               var html =
-                '1. <a href="' +
+                '1. <span style="color: #60a5fa;">' +
                 url1 +
-                '" target="_blank" style="color: #60a5fa; text-decoration: underline;">' +
-                url1 +
-                "</a> (Default)";
+                "</span> (Default)";
               if (macMdns) {
                 var url2 = "http://" + macMdns + ".local";
                 html +=
-                  '<br/>2. <a href="' +
+                  '<br/>2. <span style="color: #60a5fa;">' +
                   url2 +
-                  '" target="_blank" style="color: #60a5fa; text-decoration: underline;">' +
-                  url2 +
-                  "</a> (MAC)";
+                  "</span> (Unique Trailing MAC)";
               }
               defaultListEl.innerHTML = html;
             }
@@ -8980,14 +9158,28 @@
         if (relayBtn) {
           relayBtn.addEventListener("click", function () {
             var nextModes = [];
+            var nextActionModes = [];
             var body = "";
             for (var i = 0; i < 4; i++) {
               var checked = document.querySelector(
                 'input[name="relay-state-' + i + '"]:checked',
               );
+              var modeChecked = document.querySelector(
+                'input[name="switch-mode-' + i + '"]:checked',
+              );
               nextModes[i] = checked ? checked.value : "off";
+              nextActionModes[i] =
+                modeChecked && modeChecked.value === "sync" ? "sync" : "toggle";
               if (i > 0) body += "&";
-              body += "relay" + i + "=" + nextModes[i];
+              body +=
+                "relay" +
+                i +
+                "=" +
+                nextModes[i] +
+                "&mode" +
+                i +
+                "=" +
+                nextActionModes[i];
             }
             showPasswordModal(
               "Enter user credentials to save relay holding state",
@@ -9000,9 +9192,10 @@
                     if (d.ok) {
                       for (var i = 0; i < 4; i++) {
                         relayModesState[i] = nextModes[i];
+                        switchActionModesState[i] = nextActionModes[i];
                       }
                       refreshSwitchSettingsUi();
-                      alert("Relay settings saved!");
+                      alert("Relay & switch mode settings saved!");
                     } else {
                       alert(d.error || "Save failed");
                     }
@@ -9206,6 +9399,9 @@
                   if (d.icons && d.icons[i])
                     switchIconsState[i] = normalizeIconName(d.icons[i]);
                   if (d.relays && d.relays[i]) relayModesState[i] = d.relays[i];
+                  if (d.modes && d.modes[i])
+                    switchActionModesState[i] =
+                      d.modes[i] === "sync" ? "sync" : "toggle";
                 }
                 refreshSwitchSettingsUi();
               })
