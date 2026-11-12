@@ -3114,6 +3114,104 @@
           </div>
         </div>
 
+        <!-- API Key Setup -->
+        <div class="panel" id="panel-admin-apikey">
+          <div class="panel-title">API Key & External Control</div>
+          <div class="info-box">
+            <strong>Secure External API</strong> — Use this API Key to control
+            switches from another local web server or app. Viewing, enabling, or
+            regenerating this key strictly requires
+            <strong>Admin Verification</strong>.
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Enable External API Key</div>
+              <div class="setting-sub">
+                Allow external web servers to toggle switches using X-API-Key
+              </div>
+            </div>
+            <label class="sm-toggle">
+              <input type="checkbox" id="adminApiKeyEnable" />
+              <span class="sm-toggle-track"></span>
+            </label>
+          </div>
+
+          <div
+            class="setting-row"
+            style="flex-direction: column; align-items: flex-start; gap: 10px"
+          >
+            <div class="setting-label">Secret API Key</div>
+            <div
+              style="
+                display: flex;
+                gap: 8px;
+                width: 100%;
+                align-items: center;
+                flex-wrap: wrap;
+              "
+            >
+              <input
+                class="cfg-input"
+                type="text"
+                id="adminApiKeyDisplay"
+                readonly
+                value="Loading..."
+                style="
+                  max-width: 100%;
+                  flex: 1;
+                  font-family: monospace;
+                  color: #7dd3fc;
+                "
+              />
+              <button
+                type="button"
+                class="cfg-btn cfg-btn-secondary"
+                id="revealApiKeyBtn"
+                onclick="revealAdminApiKey()"
+              >
+                Reveal
+              </button>
+              <button
+                type="button"
+                class="cfg-btn cfg-btn-secondary"
+                onclick="copyAdminApiKey()"
+              >
+                Copy
+              </button>
+            </div>
+            <div class="setting-sub">
+              Send as header <code>X-API-Key</code> or body param
+              <code>key=...</code> to <code>/api/switch/toggle</code>
+            </div>
+          </div>
+
+          <div
+            style="
+              margin-top: 16px;
+              display: flex;
+              gap: 10px;
+              justify-content: flex-end;
+              flex-wrap: wrap;
+            "
+          >
+            <button
+              class="cfg-btn cfg-btn-danger"
+              type="button"
+              onclick="regenerateAdminApiKey()"
+            >
+              Regenerate Key
+            </button>
+            <button
+              class="cfg-btn cfg-btn-primary"
+              type="button"
+              onclick="saveAdminApiKeySettings()"
+            >
+              Save API Settings
+            </button>
+          </div>
+        </div>
+
         <!-- Schedule Priority -->
         <div class="panel" id="panel-admin-schedule-priority">
           <div class="panel-title with-action">
@@ -4392,11 +4490,22 @@
 
     <script>
       /* ── API Helper ── */
+      function getStoredSessionToken() {
+        return (
+          sessionStorage.getItem("smartHomeToken") ||
+          localStorage.getItem("smartHomeToken") ||
+          ""
+        );
+      }
+
       function apiPost(url, body) {
         return fetch(url, {
           method: "POST",
           cache: "no-store",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Session-Token": getStoredSessionToken(),
+          },
           body: body,
         }).then(function (r) {
           return r.json().catch(function () {
@@ -4580,6 +4689,7 @@
         admin: [
           { label: "Device Name", panel: "panel-admin-device-name" },
           { label: "mDNS Setup", panel: "panel-admin-mdns" },
+          { label: "API Key", panel: "panel-admin-apikey" },
           {
             label: "Schedule Priority",
             panel: "panel-admin-schedule-priority",
@@ -4699,6 +4809,10 @@
           startSensorAutoRealtimeMonitor();
         } else if (typeof stopSensorAutoRealtimeMonitor === "function") {
           stopSensorAutoRealtimeMonitor();
+        }
+
+        if (panelId === "panel-admin-apikey") {
+          loadAdminApiKeySettings();
         }
 
         if (panelId === "panel-admin-location") {
@@ -7487,6 +7601,147 @@
         );
       }
 
+      var currentRevealedApiKey = "";
+
+      function loadAdminApiKeySettings() {
+        currentRevealedApiKey = "";
+        var revealBtn = document.getElementById("revealApiKeyBtn");
+        if (revealBtn) revealBtn.textContent = "Reveal";
+
+        return apiGet("/api/admin/apikey")
+          .then(function (d) {
+            if (!d) return;
+            var enableEl = document.getElementById("adminApiKeyEnable");
+            var displayEl = document.getElementById("adminApiKeyDisplay");
+            if (enableEl) enableEl.checked = !!d.enabled;
+            if (displayEl) displayEl.value = d.maskedKey || "Hidden";
+          })
+          .catch(function () {});
+      }
+
+      function revealAdminApiKey() {
+        var displayEl = document.getElementById("adminApiKeyDisplay");
+        var revealBtn = document.getElementById("revealApiKeyBtn");
+
+        if (currentRevealedApiKey) {
+          currentRevealedApiKey = "";
+          if (revealBtn) revealBtn.textContent = "Reveal";
+          loadAdminApiKeySettings();
+          return;
+        }
+
+        showPasswordModal(
+          "Enter admin credentials to reveal API Key",
+          function (data, adminUser, adminPass) {
+            apiPost(
+              "/api/admin/apikey",
+              appendAdminCredentials("action=reveal", adminUser, adminPass),
+            )
+              .then(function (d) {
+                if (d && d.ok && d.apiKey) {
+                  currentRevealedApiKey = d.apiKey;
+                  if (displayEl) displayEl.value = d.apiKey;
+                  if (revealBtn) revealBtn.textContent = "Hide";
+                } else {
+                  alert((d && d.error) || "Failed to reveal API Key");
+                }
+              })
+              .catch(function () {
+                alert("Connection error");
+              });
+          },
+          null,
+          true,
+        );
+      }
+
+      function copyAdminApiKey() {
+        if (!currentRevealedApiKey) {
+          alert(
+            "Please click 'Reveal' and verify admin credentials first before copying the API key.",
+          );
+          return;
+        }
+        copyTextToClipboard(currentRevealedApiKey)
+          .then(function () {
+            alert("API Key copied to clipboard!");
+          })
+          .catch(function () {
+            alert("Unable to copy API Key.");
+          });
+      }
+
+      function saveAdminApiKeySettings() {
+        var enabled = document.getElementById("adminApiKeyEnable").checked;
+        showPasswordModal(
+          "Enter admin credentials to save API Key settings",
+          function (data, adminUser, adminPass) {
+            apiPost(
+              "/api/admin/apikey",
+              appendAdminCredentials(
+                "action=save&enabled=" + enabled,
+                adminUser,
+                adminPass,
+              ),
+            )
+              .then(function (d) {
+                if (d && d.ok) {
+                  alert("API Key settings saved!");
+                  loadAdminApiKeySettings();
+                } else {
+                  alert((d && d.error) || "Failed to save API Key settings");
+                }
+              })
+              .catch(function () {
+                alert("Connection error");
+              });
+          },
+          null,
+          true,
+        );
+      }
+
+      function regenerateAdminApiKey() {
+        if (
+          !confirm(
+            "Generate a new API Key? Any external web server using the old key will immediately lose access.",
+          )
+        ) {
+          return;
+        }
+        var enabled = document.getElementById("adminApiKeyEnable").checked;
+        showPasswordModal(
+          "Enter admin credentials to regenerate API Key",
+          function (data, adminUser, adminPass) {
+            apiPost(
+              "/api/admin/apikey",
+              appendAdminCredentials(
+                "action=regenerate&enabled=" + enabled,
+                adminUser,
+                adminPass,
+              ),
+            )
+              .then(function (d) {
+                if (d && d.ok && d.apiKey) {
+                  currentRevealedApiKey = d.apiKey;
+                  document.getElementById("adminApiKeyDisplay").value =
+                    d.apiKey;
+                  var revealBtn = document.getElementById("revealApiKeyBtn");
+                  if (revealBtn) revealBtn.textContent = "Hide";
+                  alert("New API Key generated and saved!");
+                } else {
+                  alert((d && d.error) || "Failed to regenerate API Key");
+                }
+              })
+              .catch(function () {
+                alert("Connection error");
+              });
+          },
+          null,
+          true,
+        );
+      }
+
       function loadSchedulePrioritySettings() {
         ensurePrioritySelectOptions();
         setPriorityOrderInUi(DEFAULT_AUTOMATION_PRIORITY_ORDER);
@@ -9532,3 +9787,17 @@
     </script>
   </body>
 </html>
+
+<!-- // Access the API keys
+fetch("http://192.168.1.100/api/switch/toggle", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/x-www-form-urlencoded",
+    "X-API-Key": "sh_YOUR_COPIED_API_KEY"
+  },
+  body: "index=1&state=toggle" // Flips Bedroom light and returns new state!
+})
+.then(r => r.json())
+.then(data => {
+  console.log("Bedroom is now:", data.state ? "ON" : "OFF");
+}); -->

@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ESP32 API Tester</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100vh;
+        overflow: hidden;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background:
+          radial-gradient(
+            circle at 50% 0%,
+            rgba(37, 99, 235, 0.16),
+            transparent 60%
+          ),
+          #0b0e14;
+        color: #e2e8f0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+      }
+
+      .card {
+        width: 100%;
+        max-width: 840px;
+        background: rgba(30, 41, 59, 0.6);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 20px;
+        padding: 20px 26px;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        padding-bottom: 10px;
+      }
+
+      .title {
+        font-size: 1rem;
+        font-weight: 700;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: #60a5fa;
+      }
+
+      .row-2 {
+        display: grid;
+        grid-template-columns: 1.6fr 1fr;
+        gap: 14px;
+      }
+
+      .row-3 {
+        display: grid;
+        grid-template-columns: 1fr 1fr 160px;
+        gap: 12px;
+        align-items: end;
+      }
+
+      label {
+        display: block;
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: #94a3b8;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 5px;
+      }
+
+      .input-wrap {
+        display: flex;
+        gap: 8px;
+      }
+
+      input,
+      select {
+        width: 100%;
+        height: 38px;
+        padding: 0 14px;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(15, 23, 42, 0.8);
+        color: #f1f5f9;
+        font-size: 0.88rem;
+        outline: none;
+      }
+
+      input:focus,
+      select:focus {
+        border-color: #3b82f6;
+      }
+
+      .mono {
+        font-family: "Consolas", "Monaco", monospace;
+      }
+
+      button {
+        height: 38px;
+        padding: 0 18px;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        font-size: 0.84rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition:
+          transform 0.1s,
+          filter 0.15s;
+        white-space: nowrap;
+      }
+
+      button:active {
+        transform: scale(0.97);
+      }
+
+      .btn-send {
+        background: linear-gradient(135deg, #2563eb, #3b82f6);
+        color: #fff;
+        border-color: rgba(96, 165, 250, 0.4);
+      }
+
+      .btn-gen {
+        flex: 1;
+        background: rgba(56, 189, 248, 0.15);
+        border-color: rgba(56, 189, 248, 0.38);
+        color: #38bdf8;
+      }
+
+      .btn-gen:hover {
+        background: rgba(56, 189, 248, 0.24);
+      }
+
+      .btn-sm {
+        background: rgba(255, 255, 255, 0.07);
+        color: #cbd5e1;
+        font-size: 0.76rem;
+        padding: 0 14px;
+      }
+
+      .btn-refresh {
+        height: 30px;
+        font-size: 0.74rem;
+        padding: 0 12px;
+        background: rgba(255, 255, 255, 0.07);
+        color: #cbd5e1;
+      }
+
+      /* 4-Switch Live Strip */
+      .sw-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+      }
+
+      .sw-box {
+        padding: 9px 12px;
+        border-radius: 11px;
+        background: rgba(15, 23, 42, 0.65);
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        cursor: pointer;
+        transition:
+          border-color 0.15s,
+          background 0.15s;
+      }
+
+      .sw-box:hover {
+        border-color: rgba(96, 165, 250, 0.4);
+      }
+
+      .sw-box.on {
+        background: rgba(37, 99, 235, 0.2);
+        border-color: rgba(96, 165, 250, 0.5);
+      }
+
+      .sw-name {
+        font-size: 0.82rem;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .sw-badge {
+        display: inline-block;
+        font-size: 0.7rem;
+        font-weight: 700;
+        padding: 3px 9px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #94a3b8;
+      }
+
+      .sw-box.on .sw-badge {
+        background: #2563eb;
+        color: #fff;
+      }
+
+      /* Compact Console */
+      .console-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 5px;
+      }
+
+      .badge {
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-weight: 700;
+        font-size: 0.7rem;
+      }
+
+      .badge-idle {
+        background: rgba(148, 163, 184, 0.15);
+        color: #94a3b8;
+      }
+
+      .badge-ok {
+        background: rgba(34, 197, 94, 0.2);
+        color: #4ade80;
+      }
+
+      .badge-err {
+        background: rgba(239, 68, 68, 0.2);
+        color: #f87171;
+      }
+
+      .badge-code {
+        background: rgba(56, 189, 248, 0.2);
+        color: #38bdf8;
+      }
+
+      pre {
+        background: rgba(2, 6, 23, 0.85);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-size: 0.76rem;
+        line-height: 1.4;
+        color: #7dd3fc;
+        height: 155px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+
+      .footer-actions {
+        display: flex;
+        gap: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="header">
+        <span class="title">ESP32 API Tester</span>
+        <button class="btn-refresh" onclick="fetchLiveStates()">
+          Refresh Status
+        </button>
+      </div>
+
+      <div class="row-2">
+        <div>
+          <label for="espHost">ESP32 Address (IP or mDNS)</label>
+          <input
+            type="text"
+            id="espHost"
+            class="mono"
+            value="http://smarthome.local"
+            placeholder="http://192.168.1.100"
+          />
+        </div>
+        <div>
+          <label for="authMethod">Send API Key Via</label>
+          <select id="authMethod">
+            <option value="header">HTTP Header (X-API-Key)</option>
+            <option value="body" selected>POST Body (key)</option>
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <label for="apiKey">Secret API Key</label>
+        <div class="input-wrap">
+          <input
+            type="password"
+            id="apiKey"
+            class="mono"
+            placeholder="Paste full 32-character sh_... key here"
+          />
+          <button type="button" class="btn-sm" onclick="toggleKeyVis(this)">
+            Show
+          </button>
+        </div>
+      </div>
+
+      <div class="row-3">
+        <div>
+          <label for="swIndex">Select Switch (index)</label>
+          <select id="swIndex">
+            <option value="0">Index 0 — Switch 1</option>
+            <option value="1">Index 1 — Switch 2</option>
+            <option value="2">Index 2 — Switch 3</option>
+            <option value="3">Index 3 — Switch 4</option>
+          </select>
+        </div>
+        <div>
+          <label for="swState">Target State (state)</label>
+          <select id="swState">
+            <option value="toggle" selected>Toggle</option>
+            <option value="true">True (Turn ON)</option>
+            <option value="false">False (Turn OFF)</option>
+          </select>
+        </div>
+        <button class="btn-send" onclick="sendToggleRequest()">SEND</button>
+      </div>
+
+      <div>
+        <label>Live Switches (Click Any to Toggle)</label>
+        <div class="sw-grid">
+          <div class="sw-box" onclick="quickCardToggle(0)" id="swCard0">
+            <span class="sw-name" id="swName0">SW 1</span>
+            <span class="sw-badge" id="swBadge0">--</span>
+          </div>
+          <div class="sw-box" onclick="quickCardToggle(1)" id="swCard1">
+            <span class="sw-name" id="swName1">SW 2</span>
+            <span class="sw-badge" id="swBadge1">--</span>
+          </div>
+          <div class="sw-box" onclick="quickCardToggle(2)" id="swCard2">
+            <span class="sw-name" id="swName2">SW 3</span>
+            <span class="sw-badge" id="swBadge2">--</span>
+          </div>
+          <div class="sw-box" onclick="quickCardToggle(3)" id="swCard3">
+            <span class="sw-name" id="swName3">SW 4</span>
+            <span class="sw-badge" id="swBadge3">--</span>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="console-head">
+          <label id="outputLabel" style="margin: 0"
+            >API Response / Generated Code</label
+          >
+          <div>
+            <span id="httpStatusBadge" class="badge badge-idle">IDLE</span>
+            <span
+              id="responseTime"
+              class="mono"
+              style="font-size: 0.72rem; color: #64748b; margin-left: 6px"
+              >0 ms</span
+            >
+          </div>
+        </div>
+        <pre id="responseOutput" class="mono">// Ready</pre>
+      </div>
+
+      <!-- Generate Function & Copy Buttons -->
+      <div class="footer-actions">
+        <button
+          class="btn-gen"
+          type="button"
+          onclick="generateCurrentFunction()"
+        >
+          Generate Function
+        </button>
+        <button
+          class="btn-sm"
+          type="button"
+          id="copyBtn"
+          onclick="copyOutput()"
+        >
+          Copy Output
+        </button>
+      </div>
+    </div>
+
+    <script>
+      var hostInput = document.getElementById("espHost");
+      var keyInput = document.getElementById("apiKey");
+
+      if (localStorage.getItem("testEspHost")) {
+        hostInput.value = localStorage.getItem("testEspHost");
+      }
+      if (localStorage.getItem("testEspApiKey")) {
+        keyInput.value = localStorage.getItem("testEspApiKey");
+      }
+
+      function getBaseUrl() {
+        var raw = hostInput.value.trim().replace(/\/+$/, "");
+        if (raw && !/^https?:\/\//i.test(raw)) {
+          raw = "http://" + raw;
+        }
+        localStorage.setItem("testEspHost", raw);
+        return raw;
+      }
+
+      function toggleKeyVis(btn) {
+        var isPass = keyInput.type === "password";
+        keyInput.type = isPass ? "text" : "password";
+        btn.textContent = isPass ? "Hide" : "Show";
+      }
+
+      function generateCurrentFunction() {
+        var baseUrl = getBaseUrl() || "http://192.168.1.100";
+        var apiKey = keyInput.value.trim() || "sh_YOUR_COPIED_API_KEY";
+        var idx = document.getElementById("swIndex").value;
+        var st = document.getElementById("swState").value;
+        var method = document.getElementById("authMethod").value;
+        var nameEl = document.getElementById("swName" + idx);
+        var swLabel = nameEl
+          ? nameEl.textContent.trim()
+          : "Switch " + (parseInt(idx, 10) + 1);
+
+        var code = "";
+        if (method === "header") {
+          code =
+            'fetch("' +
+            baseUrl +
+            '/api/switch/toggle", {\n' +
+            '  method: "POST",\n' +
+            "  headers: {\n" +
+            '    "Content-Type": "application/x-www-form-urlencoded",\n' +
+            '    "X-API-Key": "' +
+            apiKey +
+            '"\n' +
+            "  },\n" +
+            '  body: "index=' +
+            idx +
+            "&state=" +
+            st +
+            '"\n' +
+            "})\n" +
+            ".then(r => r.json())\n" +
+            ".then(data => {\n" +
+            '  console.log("' +
+            swLabel +
+            ' is now:", data.state ? "ON" : "OFF");\n' +
+            "});";
+        } else {
+          code =
+            'fetch("' +
+            baseUrl +
+            '/api/switch/toggle", {\n' +
+            '  method: "POST",\n' +
+            "  headers: {\n" +
+            '    "Content-Type": "application/x-www-form-urlencoded"\n' +
+            "  },\n" +
+            '  body: "index=' +
+            idx +
+            "&state=" +
+            st +
+            "&key=" +
+            apiKey +
+            '"\n' +
+            "})\n" +
+            ".then(r => r.json())\n" +
+            ".then(data => {\n" +
+            '  console.log("' +
+            swLabel +
+            ' is now:", data.state ? "ON" : "OFF");\n' +
+            "});";
+        }
+
+        var badge = document.getElementById("httpStatusBadge");
+        var timeEl = document.getElementById("responseTime");
+        var output = document.getElementById("responseOutput");
+
+        badge.className = "badge badge-code";
+        badge.textContent = "GENERATED JS";
+        timeEl.textContent = method === "header" ? "Header Auth" : "Body Auth";
+        output.textContent = code;
+      }
+
+      function copyOutput() {
+        var text = document.getElementById("responseOutput").textContent;
+        var btn = document.getElementById("copyBtn");
+        navigator.clipboard.writeText(text).then(function () {
+          btn.textContent = "Copied!";
+          setTimeout(function () {
+            btn.textContent = "Copy Output";
+          }, 1200);
+        });
+      }
+
+      function sendToggleRequest(overrideState, overrideIndex) {
+        var baseUrl = getBaseUrl();
+        var apiKey = keyInput.value.trim();
+        localStorage.setItem("testEspApiKey", apiKey);
+
+        var idx =
+          overrideIndex !== undefined
+            ? overrideIndex
+            : document.getElementById("swIndex").value;
+        var st =
+          overrideState !== undefined
+            ? overrideState
+            : document.getElementById("swState").value;
+        var method = document.getElementById("authMethod").value;
+
+        var headers = { "Content-Type": "application/x-www-form-urlencoded" };
+        var body =
+          "index=" +
+          encodeURIComponent(idx) +
+          "&state=" +
+          encodeURIComponent(st);
+
+        if (method === "header") {
+          if (apiKey) headers["X-API-Key"] = apiKey;
+        } else {
+          if (apiKey) body += "&key=" + encodeURIComponent(apiKey);
+        }
+
+        var badge = document.getElementById("httpStatusBadge");
+        var timeEl = document.getElementById("responseTime");
+        var output = document.getElementById("responseOutput");
+
+        badge.className = "badge badge-idle";
+        badge.textContent = "SENDING...";
+        var startMs = performance.now();
+
+        fetch(baseUrl + "/api/switch/toggle", {
+          method: "POST",
+          headers: headers,
+          body: body,
+        })
+          .then(function (r) {
+            timeEl.textContent =
+              Math.round(performance.now() - startMs) + " ms";
+            return r.text().then(function (raw) {
+              return { status: r.status, ok: r.ok, raw: raw };
+            });
+          })
+          .then(function (res) {
+            badge.className = res.ok ? "badge badge-ok" : "badge badge-err";
+            badge.textContent = "HTTP " + res.status;
+            output.textContent = res.raw;
+            fetchLiveStates();
+          })
+          .catch(function (err) {
+            badge.className = "badge badge-err";
+            badge.textContent = "ERROR";
+            output.textContent = "Unreachable (" + err.message + ")";
+          });
+      }
+
+      function quickCardToggle(index) {
+        document.getElementById("swIndex").value = String(index);
+        sendToggleRequest("toggle", index);
+      }
+
+      function fetchLiveStates() {
+        fetch(getBaseUrl() + "/api/switches", { cache: "no-store" })
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (d) {
+            if (!d || !Array.isArray(d.states)) return;
+            for (var i = 0; i < 4; i++) {
+              var card = document.getElementById("swCard" + i);
+              var nameEl = document.getElementById("swName" + i);
+              var badgeEl = document.getElementById("swBadge" + i);
+              if (d.names && d.names[i]) nameEl.textContent = d.names[i];
+              var isOn = !!d.states[i];
+              card.classList.toggle("on", isOn);
+              badgeEl.textContent = isOn ? "ON" : "OFF";
+            }
+          })
+          .catch(function () {});
+      }
+
+      fetchLiveStates();
+      setInterval(fetchLiveStates, 3000);
+    </script>
+  </body>
+</html>

@@ -1222,31 +1222,48 @@
       var SESSION_KEY = "smartHomeSession";
       var REMEMBER_KEY = "smartHomeRemember";
       var ROLE_KEY = "smartHomeRole";
+      var USER_KEY = "smartHomeUser";
+      var TOKEN_KEY = "smartHomeToken";
 
-      function isLoggedIn() {
-        return sessionStorage.getItem(SESSION_KEY) === "true";
+      function getSessionToken() {
+        return (
+          sessionStorage.getItem(TOKEN_KEY) ||
+          localStorage.getItem(TOKEN_KEY) ||
+          ""
+        );
       }
 
-      var USER_KEY = "smartHomeUser";
+      function isLoggedIn() {
+        return (
+          sessionStorage.getItem(SESSION_KEY) === "true" && !!getSessionToken()
+        );
+      }
 
-      function setLoggedIn(remember, role, user) {
+      function setLoggedIn(remember, role, user, token) {
         sessionStorage.setItem(SESSION_KEY, "true");
         sessionStorage.setItem(ROLE_KEY, role || "user");
         if (user) sessionStorage.setItem(USER_KEY, user);
+        if (token) sessionStorage.setItem(TOKEN_KEY, token);
         if (remember) {
           localStorage.setItem(REMEMBER_KEY, "true");
+          if (token) localStorage.setItem(TOKEN_KEY, token);
         }
       }
 
       function checkRemembered() {
-        return localStorage.getItem(REMEMBER_KEY) === "true";
+        return (
+          localStorage.getItem(REMEMBER_KEY) === "true" &&
+          !!localStorage.getItem(TOKEN_KEY)
+        );
       }
 
       function logout() {
         sessionStorage.removeItem(SESSION_KEY);
         sessionStorage.removeItem(ROLE_KEY);
         sessionStorage.removeItem(USER_KEY);
+        sessionStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(REMEMBER_KEY);
+        localStorage.removeItem(TOKEN_KEY);
         window.location.reload();
       }
 
@@ -1616,11 +1633,20 @@
           }
           fetch("/api/switch/toggle", {
             method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+              "X-Session-Token": getSessionToken(),
+            },
             body: "index=" + idx + "&state=" + checked,
-          }).catch(function (err) {
-            console.log("Toggle error:", err);
-          });
+          })
+            .then(function (r) {
+              if (r.status === 401 || r.status === 403) {
+                logout(); // If token is missing or invalid, force login screen
+              }
+            })
+            .catch(function (err) {
+              console.log("Toggle error:", err);
+            });
         });
       });
 
@@ -1808,7 +1834,12 @@
             }
 
             if (res.ok && res.data.ok) {
-              setLoggedIn(rememberMeCheckbox.checked, res.data.role, u);
+              setLoggedIn(
+                rememberMeCheckbox.checked,
+                res.data.role,
+                u,
+                res.data.token,
+              );
               loginScreen.classList.add("hidden");
               dashboard.classList.remove("hidden");
               loginError.textContent = "";
@@ -1933,7 +1964,9 @@
             // 2. "Every time" mode -> clear stored session on page refresh so login is required
             if (loginMode === "everytime") {
               sessionStorage.removeItem(SESSION_KEY);
+              sessionStorage.removeItem(TOKEN_KEY);
               localStorage.removeItem(REMEMBER_KEY);
+              localStorage.removeItem(TOKEN_KEY);
               document.body.classList.remove("app-init");
               return;
             }

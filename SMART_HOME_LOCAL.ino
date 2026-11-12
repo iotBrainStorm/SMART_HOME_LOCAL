@@ -107,6 +107,11 @@ const char *PRIMARY_ADMIN_PASS = "456456";
 String configuredPrimaryAdminId = String(PRIMARY_ADMIN_ID);
 String configuredPrimaryAdminPass = String(PRIMARY_ADMIN_PASS);
 
+// Security: Web Session Token & External API Key
+bool apiKeyEnabled = false;
+String configuredApiKey = "";
+String webSessionToken = "";
+
 // Admin / Time
 String ntpSrv = DEFAULT_NTP_SERVER;
 String tzStr = DEFAULT_TIME_ZONE;
@@ -581,6 +586,26 @@ void applyPendingAutomationActions() {
   }
 }
 
+String generateRandomHexToken(size_t length) {
+  const char hexChars[] = "0123456789abcdef";
+  String token = "";
+  token.reserve(length);
+  for (size_t i = 0; i < length; i++) {
+    token += hexChars[esp_random() & 0x0F];
+  }
+  return token;
+}
+
+String generateNewApiKey() {
+  return "sh_" + generateRandomHexToken(29); // 32 characters total
+}
+
+String getMaskedApiKey(const String &key) {
+  if (key.length() <= 7)
+    return "********";
+  return key.substring(0, 3) + "*************************" + key.substring(key.length() - 4);
+}
+
 void loadAdminSettings() {
   String storedDeviceName;
   String storedPrimaryAdminId;
@@ -627,7 +652,20 @@ void loadAdminSettings() {
   if (timeFormat != "12h" && timeFormat != "24h")
     timeFormat = "24h";
   lastSyncTimeStr = prefs.getString("lastSync", "");
+  apiKeyEnabled = prefs.getBool("apiEn", false);
+  configuredApiKey = prefs.getString("apiKey", "");
+  webSessionToken = prefs.getString("sesTok", "");
   prefs.end();
+
+  bool missingSecurityTokens = false;
+  if (configuredApiKey.length() < 16) {
+    configuredApiKey = generateNewApiKey();
+    missingSecurityTokens = true;
+  }
+  if (webSessionToken.length() < 16) {
+    webSessionToken = generateRandomHexToken(32);
+    missingSecurityTokens = true;
+  }
 
   storedDeviceName.trim();
   String defaultDeviceName = getDefaultDeviceName();
@@ -675,7 +713,7 @@ void loadAdminSettings() {
   }
 
   if (storedDeviceName.isEmpty() || migrateLegacyReversedDeviceName ||
-      !orderValid || missingPrimaryAdminProfile) {
+      !orderValid || missingPrimaryAdminProfile || missingSecurityTokens) {
     prefs.begin("admin", false);
     if (storedDeviceName.isEmpty() || migrateLegacyReversedDeviceName) {
       prefs.putString("devname", deviceName);
@@ -691,6 +729,11 @@ void loadAdminSettings() {
     if (missingPrimaryAdminProfile) {
       prefs.putString("puid", configuredPrimaryAdminId);
       prefs.putString("ppass", configuredPrimaryAdminPass);
+    }
+    if (missingSecurityTokens) {
+      prefs.putBool("apiEn", apiKeyEnabled);
+      prefs.putString("apiKey", configuredApiKey);
+      prefs.putString("sesTok", webSessionToken);
     }
     prefs.end();
   }
@@ -959,6 +1002,18 @@ void resetValidationToDefault() {
   prefs.putBool("valVerEn", true);
   prefs.putInt("valMaxAtt", 3);
   prefs.putString("valLockMd", "restart_or_1h");
+  prefs.end();
+}
+
+void resetApiKeyToDefault() {
+  apiKeyEnabled = false;
+  configuredApiKey = generateNewApiKey();
+  webSessionToken = generateRandomHexToken(32);
+
+  prefs.begin("admin", false);
+  prefs.putBool("apiEn", false);
+  prefs.putString("apiKey", configuredApiKey);
+  prefs.putString("sesTok", webSessionToken);
   prefs.end();
 }
 
@@ -1272,6 +1327,76 @@ void sendAuthFailureResponse(AsyncWebServerRequest *req, const String &baseError
   response->setCode(isLockedOut ? 429 : 403);
   serializeJson(d, *response);
   req->send(response);
+}
+
+// Protects switch toggles & dashboard actions via Session Token, API Key, or User Login
+bool requireSwitchControlAuth(AsyncWebServerRequest *req) {
+  updateLockoutState();
+  if (isLockedOut) {
+    sendAuthFailureResponse(req, "Device is locked");
+    return false;
+  }
+
+  // 1. Check External API Key first (Header 'X-API-Key' or param 'key')
+  String providedApiKey = "";
+  if (req->hasHeader("X-API-Key")) {
+    providedApiKey = req->getHeader("X-API-Key")->value();
+  } else if (req->hasParam("key", true)) {
+    providedApiKey = req->getParam("key", true)->value();
+  } else if (req->hasParam("key", false)) {
+    providedApiKey = req->getParam("key", false)->value();
+  }
+  providedApiKey.trim();
+
+  if (!providedApiKey.isEmpty()) {
+    if (!apiKeyEnabled) {
+      req->send(403, "application/json", "{\"ok\":false,\"error\":\"External API Key access is disabled by Administrator\"}");
+      return false;
+    }
+    if (providedApiKey == configuredApiKey && !configuredApiKey.isEmpty()) {
+      registerAuthAttempt(true);
+      return true;
+    }
+    registerAuthAttempt(false);
+    sendAuthFailureResponse(req, "Invalid API Key");
+    return false;
+  }
+
+  // 2. If User Login is disabled in Validation settings, allow local web UI
+  if (!loginEnabled) {
+    return true;
+  }
+
+  // 3. Check Browser Session Token (Header 'X-Session-Token' or param 'token')
+  String providedToken = "";
+  if (req->hasHeader("X-Session-Token")) {
+    providedToken = req->getHeader("X-Session-Token")->value();
+  } else if (req->hasParam("token", true)) {
+    providedToken = req->getParam("token", true)->value();
+  } else if (req->hasParam("token", false)) {
+    providedToken = req->getParam("token", false)->value();
+  }
+  providedToken.trim();
+
+  if (!providedToken.isEmpty() && providedToken == webSessionToken) {
+    return true;
+  }
+
+  // 4. Fallback: Check direct User Credentials if sent
+  if (req->hasParam("adminUser", true) && req->hasParam("adminPass", true)) {
+    String u = req->getParam("adminUser", true)->value();
+    String p = req->getParam("adminPass", true)->value();
+    if (verifyAnyUser(u, p)) {
+      registerAuthAttempt(true);
+      return true;
+    }
+    registerAuthAttempt(false);
+    sendAuthFailureResponse(req, "Invalid user credentials");
+    return false;
+  }
+
+  req->send(401, "application/json", "{\"ok\":false,\"authRequired\":true,\"error\":\"Unauthorized: Login or valid API key required\"}");
+  return false;
 }
 
 bool requireUserVerification(AsyncWebServerRequest *req, bool forceAlways = false) {
@@ -2132,7 +2257,7 @@ void setupWebServer() {
   // CORS AND MEMORY CLOSE HEADERS
   DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
   DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type");
+  DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type, X-API-Key, X-Session-Token");
   DefaultHeaders::Instance().addHeader("Connection", "close"); // FORCES BROWSERS TO RELEASE RAM INSTANTLY
 
   server.on("/ping", HTTP_GET, [](AsyncWebServerRequest *req) { req->send(200, "text/plain", "pong"); });
@@ -2284,7 +2409,7 @@ void setupWebServer() {
     if (valid && (!reqAdmin || role == "admin")) {
       registerAuthAttempt(true);
       req->send(200, "application/json",
-                "{\"ok\":true,\"role\":\"" + role + "\",\"failedAttempts\":0,\"maxAttempts\":" + String(maxLoginAttempts) + ",\"locked\":false}");
+                "{\"ok\":true,\"role\":\"" + role + "\",\"token\":\"" + webSessionToken + "\",\"failedAttempts\":0,\"maxAttempts\":" + String(maxLoginAttempts) + ",\"locked\":false}");
     } else {
       registerAuthAttempt(false);
       sendAuthFailureResponse(req, reqAdmin ? "Admin verification failed" : "Invalid credentials");
@@ -2318,17 +2443,40 @@ void setupWebServer() {
   });
 
   server.on("/api/switch/toggle", HTTP_POST, [](AsyncWebServerRequest *req) {
-    if (!req->hasParam("index", true) || !req->hasParam("state", true)) {
-      req->send(400, "application/json", "{\"error\":\"Missing params\"}");
+    if (!requireSwitchControlAuth(req))
+      return;
+    if (!req->hasParam("index", true)) {
+      req->send(400, "application/json", "{\"error\":\"Missing index\"}");
       return;
     }
     int idx = req->getParam("index", true)->value().toInt();
-    bool st = req->getParam("state", true)->value() == "true";
+    if (idx < 0 || idx >= NUM_SWITCHES) {
+      req->send(400, "application/json", "{\"error\":\"Invalid switch index\"}");
+      return;
+    }
+
+    bool st = false;
+    if (req->hasParam("state", true)) {
+      String stVal = req->getParam("state", true)->value();
+      stVal.trim();
+      stVal.toLowerCase();
+      if (stVal == "toggle") {
+        st = !readSwState(idx);
+      } else {
+        st = (stVal == "true" || stVal == "1" || stVal == "on");
+      }
+    } else {
+      st = !readSwState(idx); // Default to toggle if state is omitted
+    }
+
     setRelayState(idx, st, "api");
-    req->send(200, "application/json", "{\"ok\":true}");
+    req->send(200, "application/json",
+              "{\"ok\":true,\"index\":" + String(idx) + ",\"state\":" + String(st ? "true" : "false") + "}");
   });
 
   server.on("/api/switches/names", HTTP_POST, [](AsyncWebServerRequest *req) {
+    if (!requireSwitchControlAuth(req))
+      return;
     prefs.begin("sw", false);
     for (int i = 0; i < NUM_SWITCHES; i++) {
       String k = "name" + String(i);
@@ -2343,6 +2491,8 @@ void setupWebServer() {
   });
 
   server.on("/api/switches/icons", HTTP_POST, [](AsyncWebServerRequest *req) {
+    if (!requireSwitchControlAuth(req))
+      return;
     prefs.begin("sw", false);
     for (int i = 0; i < NUM_SWITCHES; i++) {
       String k = "icon" + String(i);
@@ -3252,6 +3402,60 @@ void setupWebServer() {
       req->send(response);
     });
 
+    server.on("/api/admin/apikey", HTTP_GET, [](AsyncWebServerRequest *req) {
+      JsonDocument d;
+      d["enabled"] = apiKeyEnabled;
+      d["maskedKey"] = getMaskedApiKey(configuredApiKey);
+      AsyncResponseStream *response = req->beginResponseStream("application/json");
+      serializeJson(d, *response);
+      req->send(response);
+    });
+
+    server.on("/api/admin/apikey", HTTP_POST, [](AsyncWebServerRequest *req) {
+      // Strictly force Admin Verification (even if popup verification is disabled)
+      if (!requireAdminVerification(req, true))
+        return;
+
+      String action = req->hasParam("action", true) ? req->getParam("action", true)->value() : "save";
+      action.trim();
+      action.toLowerCase();
+
+      if (action == "reveal") {
+        JsonDocument d;
+        d["ok"] = true;
+        d["enabled"] = apiKeyEnabled;
+        d["apiKey"] = configuredApiKey;
+        d["maskedKey"] = getMaskedApiKey(configuredApiKey);
+        AsyncResponseStream *response = req->beginResponseStream("application/json");
+        serializeJson(d, *response);
+        req->send(response);
+        return;
+      }
+
+      if (req->hasParam("enabled", true)) {
+        apiKeyEnabled = (req->getParam("enabled", true)->value() == "true");
+      }
+
+      if (action == "regenerate") {
+        configuredApiKey = generateNewApiKey();
+      }
+
+      prefs.begin("admin", false);
+      prefs.putBool("apiEn", apiKeyEnabled);
+      prefs.putString("apiKey", configuredApiKey);
+      prefs.end();
+      notifyStorage();
+
+      JsonDocument d;
+      d["ok"] = true;
+      d["enabled"] = apiKeyEnabled;
+      d["apiKey"] = configuredApiKey;
+      d["maskedKey"] = getMaskedApiKey(configuredApiKey);
+      AsyncResponseStream *response = req->beginResponseStream("application/json");
+      serializeJson(d, *response);
+      req->send(response);
+    });
+
     server.on("/api/admin/schedule-priority", HTTP_GET, [](AsyncWebServerRequest *req) {
       JsonDocument d;
       JsonArray arr = d["order"].to<JsonArray>();
@@ -3798,6 +4002,7 @@ void setupWebServer() {
       resetUsersToSingleDefaultAdmin();
       addResetStep(steps, "default-admin", "Default admin user restored to esp / 456456", 650);
       resetValidationToDefault();
+      resetApiKeyToDefault();
       addResetStep(steps, "validation", "Login and verification restored to default (Enabled)", 520);
       addResetStep(steps, "normal-users", "All normal users cleared", 580);
       addResetStep(steps, "wifi-credentials", "WiFi credentials cleared", 520);
