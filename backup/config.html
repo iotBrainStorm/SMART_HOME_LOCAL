@@ -9789,15 +9789,14 @@
 </html>
 
 <!-- // Access the API keys
-fetch("http://192.168.1.100/api/switch/toggle", {
+fetch("http://192.168.0.125/api/switch/toggle", {
   method: "POST",
   headers: {
-    "Content-Type": "application/x-www-form-urlencoded",
-    "X-API-Key": "sh_YOUR_COPIED_API_KEY"
+    "Content-Type": "application/x-www-form-urlencoded"
   },
-  body: "index=1&state=toggle" // Flips Bedroom light and returns new state!
+  body: "index=0&state=toggle&key=sh_5003c0712e4ad3c9af2b1fd04efcf"
 })
 .then(r => r.json())
 .then(data => {
-  console.log("Bedroom is now:", data.state ? "ON" : "OFF");
+  console.log("COMPUTER is now:", data.state ? "ON" : "OFF");
 }); -->
