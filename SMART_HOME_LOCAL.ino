@@ -2456,11 +2456,15 @@ void setupWebServer() {
     }
 
     bool st = false;
+    bool statusOnly = false;
     if (req->hasParam("state", true)) {
       String stVal = req->getParam("state", true)->value();
       stVal.trim();
       stVal.toLowerCase();
-      if (stVal == "toggle") {
+      if (stVal == "status") {
+        st = readSwState(idx);
+        statusOnly = true;
+      } else if (stVal == "toggle") {
         st = !readSwState(idx);
       } else {
         st = (stVal == "true" || stVal == "1" || stVal == "on");
@@ -2469,7 +2473,9 @@ void setupWebServer() {
       st = !readSwState(idx); // Default to toggle if state is omitted
     }
 
-    setRelayState(idx, st, "api");
+    if (!statusOnly) {
+      setRelayState(idx, st, "api");
+    }
     req->send(200, "application/json",
               "{\"ok\":true,\"index\":" + String(idx) + ",\"state\":" + String(st ? "true" : "false") + "}");
   });
