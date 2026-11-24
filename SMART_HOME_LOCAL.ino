@@ -6,6 +6,8 @@
 #include <WiFiManager.h>
 #include <new>
 
+#include "mbedtls/gcm.h"
+#include "mbedtls/md.h"
 #include <Adafruit_AHT10.h>
 #include <ArduinoJson.h>
 #include <Dusk2Dawn.h>
@@ -604,6 +606,142 @@ String getMaskedApiKey(const String &key) {
   if (key.length() <= 7)
     return "********";
   return key.substring(0, 3) + "*************************" + key.substring(key.length() - 4);
+}
+
+void deriveBackupAesKey(uint8_t outKey[32]) {
+  uint64_t chipId = ESP.getEfuseMac();
+  char material[64];
+  snprintf(material, sizeof(material), "SH_BK_V1_%012llX_iotBrainStorm",
+           (unsigned long long)chipId);
+
+  mbedtls_md_context_t ctx;
+  mbedtls_md_init(&ctx);
+  mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
+  mbedtls_md_starts(&ctx);
+  mbedtls_md_update(&ctx, reinterpret_cast<const unsigned char *>(material),
+                    strlen(material));
+  mbedtls_md_finish(&ctx, outKey);
+  mbedtls_md_free(&ctx);
+}
+
+String bytesToHex(const uint8_t *buf, size_t len) {
+  static const char hex[] = "0123456789abcdef";
+  String out;
+  out.reserve(len * 2);
+  for (size_t i = 0; i < len; i++) {
+    out += hex[(buf[i] >> 4) & 0x0F];
+    out += hex[buf[i] & 0x0F];
+  }
+  return out;
+}
+
+bool hexToBytes(const String &hexStr, uint8_t *out, size_t expectedLen) {
+  if (hexStr.length() != expectedLen * 2)
+    return false;
+  auto hexVal = [](char c) -> int {
+    if (c >= '0' && c <= '9')
+      return c - '0';
+    if (c >= 'a' && c <= 'f')
+      return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+      return c - 'A' + 10;
+    return -1;
+  };
+  for (size_t i = 0; i < expectedLen; i++) {
+    int hi = hexVal(hexStr[i * 2]);
+    int lo = hexVal(hexStr[i * 2 + 1]);
+    if (hi < 0 || lo < 0)
+      return false;
+    out[i] = (uint8_t)((hi << 4) | lo);
+  }
+  return true;
+}
+
+String encryptBackupSecret(const String &plain) {
+  size_t len = plain.length();
+  if (len == 0 || len > 128)
+    return "";
+
+  uint8_t key[32];
+  uint8_t iv[12];
+  uint8_t tag[16];
+  uint8_t cipherBuf[128];
+
+  deriveBackupAesKey(key);
+  for (size_t i = 0; i < sizeof(iv); i++) {
+    iv[i] = (uint8_t)(esp_random() & 0xFF);
+  }
+
+  mbedtls_gcm_context gcm;
+  mbedtls_gcm_init(&gcm);
+  int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256);
+  if (rc == 0) {
+    rc = mbedtls_gcm_crypt_and_tag(
+        &gcm, MBEDTLS_GCM_ENCRYPT, len, iv, sizeof(iv), nullptr, 0,
+        reinterpret_cast<const unsigned char *>(plain.c_str()), cipherBuf,
+        sizeof(tag), tag);
+  }
+  mbedtls_gcm_free(&gcm);
+  memset(key, 0, sizeof(key));
+
+  if (rc != 0)
+    return "";
+
+  return "enc1:" + bytesToHex(iv, sizeof(iv)) + ":" +
+         bytesToHex(cipherBuf, len) + ":" + bytesToHex(tag, sizeof(tag));
+}
+
+bool decryptBackupSecret(const String &enc, String &plainOut) {
+  if (!enc.startsWith("enc1:"))
+    return false;
+
+  int p1 = enc.indexOf(':', 5);
+  int p2 = (p1 > 0) ? enc.indexOf(':', p1 + 1) : -1;
+  if (p1 < 0 || p2 < 0)
+    return false;
+
+  String ivHex = enc.substring(5, p1);
+  String cipherHex = enc.substring(p1 + 1, p2);
+  String tagHex = enc.substring(p2 + 1);
+
+  if (cipherHex.length() == 0 || (cipherHex.length() % 2) != 0)
+    return false;
+  size_t cipherLen = cipherHex.length() / 2;
+  if (cipherLen > 128)
+    return false;
+
+  uint8_t key[32];
+  uint8_t iv[12];
+  uint8_t tag[16];
+  uint8_t cipherBuf[128];
+  uint8_t plainBuf[129];
+
+  if (!hexToBytes(ivHex, iv, sizeof(iv)) ||
+      !hexToBytes(cipherHex, cipherBuf, cipherLen) ||
+      !hexToBytes(tagHex, tag, sizeof(tag))) {
+    return false;
+  }
+
+  deriveBackupAesKey(key);
+  mbedtls_gcm_context gcm;
+  mbedtls_gcm_init(&gcm);
+  int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256);
+  if (rc == 0) {
+    rc = mbedtls_gcm_auth_decrypt(&gcm, cipherLen, iv, sizeof(iv), nullptr, 0,
+                                  tag, sizeof(tag), cipherBuf, plainBuf);
+  }
+  mbedtls_gcm_free(&gcm);
+  memset(key, 0, sizeof(key));
+
+  if (rc != 0) {
+    memset(plainBuf, 0, sizeof(plainBuf));
+    return false;
+  }
+
+  plainBuf[cipherLen] = '\0';
+  plainOut = String(reinterpret_cast<const char *>(plainBuf));
+  memset(plainBuf, 0, sizeof(plainBuf));
+  return true;
 }
 
 void loadAdminSettings() {
@@ -1634,8 +1772,9 @@ void updateLastSyncTimestamp() {
   struct tm ti;
   if (readCurrentLocalTime(&ti)) {
     timeSynced = true;
-    ntpSyncSeq++;
-    lastSyncTimeStr = formatSyncTimestamp(&ti);
+    String syncedNow = formatSyncTimestamp(&ti);
+    lastSyncTimeStr = syncedNow;
+    ntpSyncSeq++; // Increment AFTER lastSyncTimeStr is updated
     Preferences localPrefs;
     localPrefs.begin("admin", false);
     localPrefs.putString("lastSync", lastSyncTimeStr);
@@ -3563,6 +3702,7 @@ void setupWebServer() {
       d["lastSynced"] = lastSyncTimeStr;
       d["syncSeq"] = ntpSyncSeq;
       AsyncResponseStream *response = req->beginResponseStream("application/json");
+      response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
       serializeJson(d, *response);
       req->send(response);
     });
@@ -3612,9 +3752,13 @@ void setupWebServer() {
       prefs.putString("tFmt", timeFormat);
       prefs.end();
 
+      // Snapshot sequence & timestamp BEFORE triggering SNTP on Core 1
+      uint32_t seqBefore = ntpSyncSeq;
+      String prevLastSynced = lastSyncTimeStr;
+
       bool ok = (WiFi.status() == WL_CONNECTED);
       if (ok) {
-        ntpResyncPending = true; // Trigger once cleanly inside loop()
+        ntpResyncPending = true;
         lastCheckedMinute = -1;
       }
       notifyStorage();
@@ -3622,11 +3766,12 @@ void setupWebServer() {
       JsonDocument d;
       d["ok"] = ok;
       d["synced"] = timeSynced;
-      d["lastSynced"] = lastSyncTimeStr;
-      d["syncSeq"] = ntpSyncSeq;
+      d["lastSynced"] = prevLastSynced;
+      d["syncSeq"] = seqBefore;
       if (!ok)
         d["error"] = "WiFi not connected";
       AsyncResponseStream *response = req->beginResponseStream("application/json");
+      response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
       serializeJson(d, *response);
       req->send(response);
     });
@@ -3949,7 +4094,7 @@ void setupWebServer() {
 
       JsonObject apiObj = doc["api"].to<JsonObject>();
       apiObj["enabled"] = apiKeyEnabled;
-      apiObj["apiKey"] = configuredApiKey;
+      apiObj["apiKeyEnc"] = encryptBackupSecret(configuredApiKey);
 
       // 3. Network IP settings (WiFi SSID/pass excluded for safety)
       JsonObject net = doc["network"].to<JsonObject>();
@@ -4001,7 +4146,7 @@ void setupWebServer() {
       pFuture.end();
       pSensor.end();
 
-      // 5. Users
+      // 5. Users (passwords encrypted with AES-256-GCM)
       pUsers.begin("users", true);
       int uCnt = pUsers.getInt("cnt", 0);
       JsonArray uArr = doc["users"].to<JsonArray>();
@@ -4011,7 +4156,10 @@ void setupWebServer() {
           continue;
         JsonDocument tmp;
         if (!deserializeJson(tmp, raw) && tmp.is<JsonObject>()) {
-          uArr.add(tmp.as<JsonObject>());
+          JsonObject uOut = uArr.add<JsonObject>();
+          uOut["id"] = tmp["id"].as<String>();
+          uOut["role"] = tmp["role"].as<String>();
+          uOut["passEnc"] = encryptBackupSecret(tmp["pass"].as<String>());
         }
       }
       pUsers.end();
@@ -4193,13 +4341,17 @@ void setupWebServer() {
               apiKeyEnabled = apiObj["enabled"].as<bool>();
               localPrefs.putBool("apiEn", apiKeyEnabled);
             }
-            if (apiObj["apiKey"].is<const char *>()) {
-              String restoredKey = apiObj["apiKey"].as<String>();
-              restoredKey.trim();
-              if (restoredKey.length() >= 16) {
-                configuredApiKey = restoredKey;
-                localPrefs.putString("apiKey", configuredApiKey);
-              }
+            String restoredKey = "";
+            if (apiObj["apiKeyEnc"].is<const char *>()) {
+              decryptBackupSecret(apiObj["apiKeyEnc"].as<String>(), restoredKey);
+            } else if (apiObj["apiKey"].is<const char *>()) {
+              // Backward compatibility for older backups
+              restoredKey = apiObj["apiKey"].as<String>();
+            }
+            restoredKey.trim();
+            if (restoredKey.length() >= 16) {
+              configuredApiKey = restoredKey;
+              localPrefs.putString("apiKey", configuredApiKey);
             }
           }
           localPrefs.end();
@@ -4280,14 +4432,25 @@ void setupWebServer() {
           // 5. Restore Users (only if backup contains at least 1 valid admin)
           if (b["users"].is<JsonArray>()) {
             JsonArray uArr = b["users"].as<JsonArray>();
+            auto extractUserPass = [](JsonObject uObj) -> String {
+              String out = "";
+              if (uObj["passEnc"].is<const char *>()) {
+                decryptBackupSecret(uObj["passEnc"].as<String>(), out);
+              } else if (uObj["pass"].is<const char *>()) {
+                out = uObj["pass"].as<String>();
+              }
+              return normalizeUserPass(out);
+            };
+
             String restoredAdminId = "";
             String restoredAdminPass = "";
             for (JsonVariant v : uArr) {
               if (!v.is<JsonObject>())
                 continue;
-              if (normalizeUserRole(v["role"].as<String>()) == "admin") {
-                String uid = normalizeUserId(v["id"].as<String>());
-                String upass = normalizeUserPass(v["pass"].as<String>());
+              JsonObject uObj = v.as<JsonObject>();
+              if (normalizeUserRole(uObj["role"].as<String>()) == "admin") {
+                String uid = normalizeUserId(uObj["id"].as<String>());
+                String upass = extractUserPass(uObj);
                 if (!uid.isEmpty() && !upass.isEmpty()) {
                   restoredAdminId = uid;
                   restoredAdminPass = upass;
@@ -4302,14 +4465,15 @@ void setupWebServer() {
               for (JsonVariant v : uArr) {
                 if (!v.is<JsonObject>())
                   continue;
-                String uid = normalizeUserId(v["id"].as<String>());
-                String upass = normalizeUserPass(v["pass"].as<String>());
+                JsonObject uObj = v.as<JsonObject>();
+                String uid = normalizeUserId(uObj["id"].as<String>());
+                String upass = extractUserPass(uObj);
                 if (uid.isEmpty() || upass.isEmpty())
                   continue;
                 JsonDocument uDoc;
                 uDoc["id"] = uid;
                 uDoc["pass"] = upass;
-                uDoc["role"] = normalizeUserRole(v["role"].as<String>());
+                uDoc["role"] = normalizeUserRole(uObj["role"].as<String>());
                 String uStr;
                 serializeJson(uDoc, uStr);
                 localPrefs.putString(("u" + String(idx)).c_str(), uStr);

@@ -3924,16 +3924,16 @@
             <strong>Full JSON Configuration Backup</strong> — Exports and
             restores Switches, Automations, Sensors, Time, Location, mDNS,
             Device Name, Validation, Users, IP Settings, and your
-            <strong>API Key</strong> (so connected devices keep working). Wi-Fi
-            SSID &amp; password are kept unchanged for safety. Strictly requires
-            <strong>Admin Verification</strong>.
+            <strong>API Key</strong> (AES-256-GCM encrypted so secrets are never
+            visible in plain text). Wi-Fi SSID &amp; password stay unchanged for
+            safety. Strictly requires <strong>Admin Verification</strong>.
           </div>
 
           <div class="setting-row">
             <div class="setting-info">
               <div class="setting-label">Export Configuration</div>
               <div class="setting-sub">
-                Download all settings and API Key as a JSON file
+                Download all settings and encrypted API Key as JSON
               </div>
             </div>
             <button
@@ -3945,10 +3945,7 @@
             </button>
           </div>
 
-          <div
-            class="setting-row"
-            style="flex-direction: column; align-items: flex-start; gap: 12px"
-          >
+          <div class="setting-row">
             <div class="setting-info">
               <div class="setting-label">Import Configuration</div>
               <div class="setting-sub">
@@ -3959,10 +3956,28 @@
               type="file"
               id="backupImportFile"
               accept=".json,application/json"
-              class="cfg-input"
-              style="max-width: 100%; padding: 8px"
+              style="display: none"
               onchange="onBackupFileSelected(this)"
             />
+            <button
+              type="button"
+              class="cfg-btn cfg-btn-primary"
+              onclick="triggerBackupFileSelect()"
+            >
+              Import JSON
+            </button>
+          </div>
+
+          <div
+            id="backupImportPreviewRow"
+            class="setting-row"
+            style="
+              display: none;
+              flex-direction: column;
+              align-items: flex-start;
+              gap: 12px;
+            "
+          >
             <div
               id="backupImportPreview"
               class="setting-sub"
@@ -3972,7 +3987,21 @@
                 white-space: pre-line;
               "
             ></div>
-            <div style="width: 100%; text-align: right">
+            <div
+              style="
+                width: 100%;
+                display: flex;
+                gap: 10px;
+                justify-content: flex-end;
+              "
+            >
+              <button
+                type="button"
+                class="cfg-btn cfg-btn-secondary"
+                onclick="clearSelectedBackupFile()"
+              >
+                Cancel
+              </button>
               <button
                 type="button"
                 id="importBackupBtn"
@@ -3980,7 +4009,7 @@
                 onclick="importBackupJson()"
                 disabled
               >
-                Import &amp; Restore
+                Restore Now
               </button>
             </div>
           </div>
@@ -7887,12 +7916,34 @@
         );
       }
 
+      function triggerBackupFileSelect() {
+        var fileInput = document.getElementById("backupImportFile");
+        if (!fileInput) return;
+        fileInput.value = "";
+        fileInput.click();
+      }
+
+      function clearSelectedBackupFile() {
+        parsedBackupData = null;
+        var fileInput = document.getElementById("backupImportFile");
+        var previewRow = document.getElementById("backupImportPreviewRow");
+        var previewEl = document.getElementById("backupImportPreview");
+        var importBtn = document.getElementById("importBackupBtn");
+        if (fileInput) fileInput.value = "";
+        if (previewEl) previewEl.textContent = "";
+        if (previewRow) previewRow.style.display = "none";
+        if (importBtn) importBtn.disabled = true;
+        setBackupStatus("", false);
+      }
+
       function onBackupFileSelected(input) {
+        var previewRow = document.getElementById("backupImportPreviewRow");
         var previewEl = document.getElementById("backupImportPreview");
         var importBtn = document.getElementById("importBackupBtn");
         parsedBackupData = null;
         if (importBtn) importBtn.disabled = true;
         if (previewEl) previewEl.textContent = "";
+        if (previewRow) previewRow.style.display = "none";
         setBackupStatus("", false);
 
         if (!input || !input.files || !input.files[0]) return;
@@ -7916,18 +7967,26 @@
               return;
             }
             parsedBackupData = obj;
-            var hasApi = !!(obj.api && obj.api.apiKey);
+            var apiStatus =
+              obj.api && obj.api.apiKeyEnc
+                ? "Yes (Encrypted)"
+                : obj.api && obj.api.apiKey
+                  ? "Yes (Legacy)"
+                  : "No";
             if (previewEl) {
               previewEl.textContent =
-                "Device: " +
+                "File: " +
+                file.name +
+                "\nDevice: " +
                 (obj.admin.deviceName || "Unknown") +
                 " | mDNS: " +
                 (obj.admin.mdns || "smarthome") +
                 ".local\nSwitches: " +
                 obj.switches.length +
-                " | API Key Included: " +
-                (hasApi ? "Yes" : "No");
+                " | API Key: " +
+                apiStatus;
             }
+            if (previewRow) previewRow.style.display = "flex";
             if (importBtn) importBtn.disabled = false;
           } catch (err) {
             setBackupStatus("Could not parse JSON file.", true);
@@ -8695,7 +8754,7 @@
       }
 
       function loadTimeSettings() {
-        return apiGet("/api/admin/time")
+        return apiGet("/api/admin/time?_=" + Date.now())
           .then(function (d) {
             if (d.ntp) document.getElementById("ntpServer").value = d.ntp;
             if (d.tz) {
@@ -8744,6 +8803,7 @@
 
       function syncTimeNow() {
         var btn = document.getElementById("syncTimeBtn");
+        var displayEl = document.getElementById("lastSyncedDisplay");
         var ntpServer = document.getElementById("ntpServer").value;
         var timezone = document.getElementById("timezoneSelect").value;
         var timeFormat = document.getElementById("timeFormatSelect").value;
@@ -8770,35 +8830,55 @@
               return;
             }
             var prevSeq = Number(d.syncSeq || 0);
+            var prevLastSynced = String(d.lastSynced || "").trim();
             var attempts = 0;
             var poll = function () {
               attempts++;
-              apiGet("/api/admin/time")
+              apiGet("/api/admin/time?_=" + Date.now())
                 .then(function (t) {
-                  if (t && t.lastSynced) updateLastSyncedUi(t.lastSynced);
                   var curSeq = Number((t && t.syncSeq) || 0);
-                  if (curSeq > prevSeq || attempts >= 8) {
+                  var curLastSynced = String((t && t.lastSynced) || "").trim();
+                  if (curLastSynced) updateLastSyncedUi(curLastSynced);
+
+                  var updated =
+                    curSeq > prevSeq ||
+                    (curLastSynced && curLastSynced !== prevLastSynced);
+
+                  if (updated) {
                     if (btn) {
                       btn.disabled = false;
                       btn.textContent = "Sync";
                     }
-                    if (curSeq <= prevSeq) {
-                      alert(
-                        "NTP server did not respond in time. Check internet or try time.google.com.",
-                      );
+                    if (displayEl) {
+                      displayEl.style.color = "#4ade80";
+                      setTimeout(function () {
+                        displayEl.style.color = "#60a5fa";
+                      }, 1500);
                     }
+                  } else if (attempts >= 14) {
+                    if (btn) {
+                      btn.disabled = false;
+                      btn.textContent = "Sync";
+                    }
+                    alert(
+                      "NTP server did not respond in time. Check internet or try time.google.com.",
+                    );
                   } else {
-                    setTimeout(poll, 1000);
+                    setTimeout(poll, 600);
                   }
                 })
                 .catch(function () {
-                  if (btn) {
-                    btn.disabled = false;
-                    btn.textContent = "Sync";
+                  if (attempts >= 14) {
+                    if (btn) {
+                      btn.disabled = false;
+                      btn.textContent = "Sync";
+                    }
+                  } else {
+                    setTimeout(poll, 600);
                   }
                 });
             };
-            setTimeout(poll, 1000);
+            setTimeout(poll, 400);
           })
           .catch(function () {
             if (btn) {
