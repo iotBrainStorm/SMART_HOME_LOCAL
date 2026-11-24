@@ -1430,6 +1430,31 @@ bool requireUserVerification(AsyncWebServerRequest *req, bool forceAlways = fals
   return true;
 }
 
+bool verifyAdminCredentialsStrict(AsyncWebServerRequest *req,
+                                  const String &adminUser,
+                                  const String &adminPass) {
+  updateLockoutState();
+  if (isLockedOut) {
+    sendAuthFailureResponse(req, "Device is locked");
+    return false;
+  }
+  if (adminUser.isEmpty() || adminPass.isEmpty()) {
+    req->send(400, "application/json",
+              "{\"ok\":false,\"error\":\"Admin credentials required\"}");
+    return false;
+  }
+  if (!verifyAdmin(adminUser, adminPass)) {
+    initDefaultUser();
+    if (!verifyAdmin(adminUser, adminPass)) {
+      registerAuthAttempt(false);
+      sendAuthFailureResponse(req, "Admin verification failed");
+      return false;
+    }
+  }
+  registerAuthAttempt(true);
+  return true;
+}
+
 bool requireAdminVerification(AsyncWebServerRequest *req, bool forceAlways = false) {
   if (!forceAlways && !verifyEnabled) {
     return true;
@@ -1589,6 +1614,8 @@ bool readCurrentLocalTime(struct tm *ti) {
 static char ntpServerBuf[64] = "pool.ntp.org";
 volatile bool ntpResyncPending = false;
 volatile bool sunCalcPending = false;
+volatile uint32_t ntpSyncSeq = 0;
+unsigned long lastNtpTriggerMs = 0;
 
 String formatSyncTimestamp(const struct tm *ti) {
   if (!ti)
@@ -1607,10 +1634,13 @@ void updateLastSyncTimestamp() {
   struct tm ti;
   if (readCurrentLocalTime(&ti)) {
     timeSynced = true;
+    ntpSyncSeq++;
     lastSyncTimeStr = formatSyncTimestamp(&ti);
-    prefs.begin("admin", false);
-    prefs.putString("lastSync", lastSyncTimeStr);
-    prefs.end();
+    Preferences localPrefs;
+    localPrefs.begin("admin", false);
+    localPrefs.putString("lastSync", lastSyncTimeStr);
+    localPrefs.end();
+    Serial.println("[NTP] Time synced: " + lastSyncTimeStr);
   }
 }
 
@@ -1618,13 +1648,18 @@ void sntpTimeAvailableCallback(struct timeval *t) {
   timeSynced = true;
   sunCalcPending = true; // Handled safely inside loop()
   syncTimestampPending = true;
-  lastCheckedMinute = -1;
-  lastSchedCheck = 0;
 }
 
-bool syncTime(struct tm *syncedTime = nullptr) {
+bool syncTime(bool force = false) {
   if (WiFi.status() != WL_CONNECTED)
     return false;
+
+  unsigned long nowMs = millis();
+  if (!force && lastNtpTriggerMs != 0 && (nowMs - lastNtpTriggerMs) < 3000UL) {
+    return true; // Do not abort an in-flight SNTP request
+  }
+  lastNtpTriggerMs = nowMs;
+
   loadTimeSettingsFromAdminStorage();
   ntpSrv.trim();
   if (ntpSrv.isEmpty())
@@ -1633,8 +1668,15 @@ bool syncTime(struct tm *syncedTime = nullptr) {
   strncpy(ntpServerBuf, ntpSrv.c_str(), sizeof(ntpServerBuf) - 1);
   ntpServerBuf[sizeof(ntpServerBuf) - 1] = '\0';
 
+  const char *fallback1 =
+      (ntpSrv == "time.google.com") ? "pool.ntp.org" : "time.google.com";
+  const char *fallback2 =
+      (ntpSrv == "time.cloudflare.com") ? "pool.ntp.org" : "time.cloudflare.com";
+
   sntp_set_time_sync_notification_cb(sntpTimeAvailableCallback);
-  configTime(gmtOff, 0, ntpServerBuf, "pool.ntp.org", "time.nist.gov");
+  configTime(gmtOff, 0, ntpServerBuf, fallback1, fallback2);
+  Serial.printf("[NTP] Sync requested -> %s (TZ: %s)\n", ntpServerBuf,
+                tzStr.c_str());
   return true;
 }
 
@@ -2822,6 +2864,10 @@ void setupWebServer() {
         return;
       }
       int sw = d["switchId"].as<int>();
+      if (sw < 0 || sw >= NUM_SWITCHES) {
+        req->send(400, "application/json", "{\"error\":\"Invalid switch\"}");
+        return;
+      }
       prefs.begin("sensor", false);
       prefs.putString(("t" + String(sw)).c_str(), data);
       prefs.end();
@@ -2855,6 +2901,10 @@ void setupWebServer() {
         return;
       }
       int sw = d["switchId"].as<int>();
+      if (sw < 0 || sw >= NUM_SWITCHES) {
+        req->send(400, "application/json", "{\"error\":\"Invalid switch\"}");
+        return;
+      }
       prefs.begin("sensor", false);
       prefs.putString(("h" + String(sw)).c_str(), data);
       prefs.end();
@@ -2892,6 +2942,10 @@ void setupWebServer() {
         return;
       }
       int sw = d["switchId"].as<int>();
+      if (sw < 0 || sw >= NUM_SWITCHES) {
+        req->send(400, "application/json", "{\"error\":\"Invalid switch\"}");
+        return;
+      }
       prefs.begin("sensor", false);
       prefs.putString(("x" + String(sw)).c_str(), data);
       prefs.end();
@@ -2970,10 +3024,8 @@ void setupWebServer() {
         req->send(400, "application/json", "{\"error\":\"Admin credentials required\"}");
         return;
       }
-      if (!verifyAdmin(req->getParam("adminUser", true)->value(), req->getParam("adminPass", true)->value())) {
-        req->send(403, "application/json", "{\"error\":\"Admin verification failed\"}");
+      if (!requireAdminVerification(req, true))
         return;
-      }
 
       String ssid = req->getParam("ssid", true)->value();
       String pass = req->hasParam("pass", true) ? req->getParam("pass", true)->value() : "";
@@ -2991,7 +3043,12 @@ void setupWebServer() {
       restartAt = millis() + 1200;
     });
 
-    server.on("/api/wifi/disconnect", HTTP_POST, [](AsyncWebServerRequest *req) { WiFi.disconnect(); req->send(200, "application/json", "{\"ok\":true}"); });
+    server.on("/api/wifi/disconnect", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!requireAdminVerification(req, true))
+        return;
+      WiFi.disconnect();
+      req->send(200, "application/json", "{\"ok\":true}");
+    });
 
     server.on("/api/wifi/scan", HTTP_POST, [](AsyncWebServerRequest *req) {
       req->send(200, "application/json", "{\"ok\":true,\"msg\":\"WiFi portal starting. Connect to ESP HOME at 192.168.4.1.\"}");
@@ -3019,10 +3076,8 @@ void setupWebServer() {
         req->send(400, "application/json", "{\"error\":\"Admin credentials required\"}");
         return;
       }
-      if (!verifyAdmin(req->getParam("adminUser", true)->value(), req->getParam("adminPass", true)->value())) {
-        req->send(403, "application/json", "{\"error\":\"Admin verification failed\"}");
+      if (!requireAdminVerification(req, true))
         return;
-      }
       prefs.begin("wfcfg", false);
       prefs.remove("ssid");
       prefs.remove("pass");
@@ -3107,15 +3162,8 @@ void setupWebServer() {
           return;
         }
       }
-      String adminUser = req->getParam("adminUser", true)->value();
-      String adminPass = req->getParam("adminPass", true)->value();
-      if (!verifyAdmin(adminUser, adminPass)) {
-        initDefaultUser();
-        if (!verifyAdmin(adminUser, adminPass)) {
-          req->send(403, "application/json", "{\"error\":\"Admin verification failed\"}");
-          return;
-        }
-      }
+      if (!requireAdminVerification(req, true))
+        return;
       String newId = normalizeUserId(req->getParam("id", true)->value());
       String newPass = normalizeUserPass(req->getParam("pass", true)->value());
       if (newId.isEmpty() || newPass.isEmpty()) {
@@ -3162,15 +3210,8 @@ void setupWebServer() {
           return;
         }
       }
-      String adminUser = req->getParam("adminUser", true)->value();
-      String adminPass = req->getParam("adminPass", true)->value();
-      if (!verifyAdmin(adminUser, adminPass)) {
-        initDefaultUser();
-        if (!verifyAdmin(adminUser, adminPass)) {
-          req->send(403, "application/json", "{\"error\":\"Admin verification failed\"}");
-          return;
-        }
-      }
+      if (!requireAdminVerification(req, true))
+        return;
       String uid = normalizeUserId(req->getParam("id", true)->value());
       if (uid.isEmpty()) {
         req->send(400, "application/json", "{\"error\":\"User ID is required\"}");
@@ -3240,13 +3281,8 @@ void setupWebServer() {
       }
       String adminUser = req->getParam("adminUser", true)->value();
       String adminPass = req->getParam("adminPass", true)->value();
-      if (!verifyAdmin(adminUser, adminPass)) {
-        initDefaultUser();
-        if (!verifyAdmin(adminUser, adminPass)) {
-          req->send(403, "application/json", "{\"error\":\"Admin verification failed\"}");
-          return;
-        }
-      }
+      if (!requireAdminVerification(req, true))
+        return;
       String newAdminId = normalizeUserId(req->getParam("id", true)->value());
       String newAdminPass = normalizeUserPass(req->getParam("pass", true)->value());
       if (newAdminId.isEmpty() || newAdminPass.isEmpty()) {
@@ -3517,7 +3553,7 @@ void setupWebServer() {
 
     server.on("/api/admin/time", HTTP_GET, [](AsyncWebServerRequest *req) {
       if (timeSynced && lastSyncTimeStr.isEmpty()) {
-        updateLastSyncTimestamp();
+        syncTimestampPending = true;
       }
       JsonDocument d;
       d["ntp"] = ntpSrv;
@@ -3525,6 +3561,7 @@ void setupWebServer() {
       d["timeFormat"] = timeFormat;
       d["synced"] = timeSynced;
       d["lastSynced"] = lastSyncTimeStr;
+      d["syncSeq"] = ntpSyncSeq;
       AsyncResponseStream *response = req->beginResponseStream("application/json");
       serializeJson(d, *response);
       req->send(response);
@@ -3536,6 +3573,7 @@ void setupWebServer() {
       if (req->hasParam("tz", true)) {
         tzStr = req->getParam("tz", true)->value();
         parseTZ();
+        lastCalcDay = -1;
       }
       if (req->hasParam("timeFormat", true)) {
         String tf = req->getParam("timeFormat", true)->value();
@@ -3560,6 +3598,7 @@ void setupWebServer() {
       if (req->hasParam("tz", true)) {
         tzStr = req->getParam("tz", true)->value();
         parseTZ();
+        lastCalcDay = -1;
       }
       if (req->hasParam("timeFormat", true)) {
         String tf = req->getParam("timeFormat", true)->value();
@@ -3573,16 +3612,18 @@ void setupWebServer() {
       prefs.putString("tFmt", timeFormat);
       prefs.end();
 
-      bool ok = syncTime();
-      updateLastSyncTimestamp();
-      ntpResyncPending = true;
-      lastCheckedMinute = -1;
+      bool ok = (WiFi.status() == WL_CONNECTED);
+      if (ok) {
+        ntpResyncPending = true; // Trigger once cleanly inside loop()
+        lastCheckedMinute = -1;
+      }
       notifyStorage();
 
       JsonDocument d;
       d["ok"] = ok;
       d["synced"] = timeSynced;
       d["lastSynced"] = lastSyncTimeStr;
+      d["syncSeq"] = ntpSyncSeq;
       if (!ok)
         d["error"] = "WiFi not connected";
       AsyncResponseStream *response = req->beginResponseStream("application/json");
@@ -3841,14 +3882,478 @@ void setupWebServer() {
         req->send(400, "application/json", "{\"error\":\"Admin credentials required\"}");
         return;
       }
-      if (!verifyAdmin(req->getParam("adminUser", true)->value(), req->getParam("adminPass", true)->value())) {
-        req->send(403, "application/json", "{\"error\":\"Admin verification failed\"}");
+      if (!requireAdminVerification(req, true))
         return;
-      }
       req->send(200, "application/json", "{\"ok\":true,\"msg\":\"Restarting...\"}");
       restartFlag = true;
       restartAt = millis() + 500;
     });
+
+    server.on("/api/admin/backup/export", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!requireAdminVerification(req, true))
+        return;
+
+      if (ESP.getFreeHeap() < 24000 || ESP.getMaxAllocHeap() < 12000) {
+        req->send(503, "application/json",
+                  "{\"ok\":false,\"error\":\"Low memory, retry in a moment\"}");
+        return;
+      }
+
+      JsonDocument doc;
+      doc["ok"] = true;
+      doc["backupVersion"] = 1;
+      doc["exportedAt"] = lastSyncTimeStr;
+
+      // 1. Switches
+      JsonArray swArr = doc["switches"].to<JsonArray>();
+      for (int i = 0; i < NUM_SWITCHES; i++) {
+        JsonObject o = swArr.add<JsonObject>();
+        o["name"] = swName[i];
+        o["icon"] = swIcon[i];
+        o["relayMode"] = (relayMode[i] == RELAY_MODE_ON)
+                             ? "on"
+                             : (relayMode[i] == RELAY_MODE_REMEMBER ? "remember" : "off");
+        o["actionMode"] = (swActionMode[i] == SW_ACTION_SYNC) ? "sync" : "toggle";
+      }
+
+      // 2. Admin & API Key
+      JsonObject adm = doc["admin"].to<JsonObject>();
+      adm["deviceName"] = deviceName;
+      adm["mdns"] = mdnsName;
+      adm["ntp"] = ntpSrv;
+      adm["tz"] = tzStr;
+      adm["timeFormat"] = timeFormat;
+      adm["lat"] = geoLat;
+      adm["lon"] = geoLon;
+      adm["showTemp"] = showTemp;
+      adm["showHumid"] = showHumid;
+      adm["tempPrec"] = tempPrecision;
+      adm["humidPrec"] = humidPrecision;
+
+      JsonArray prio = adm["schedulePriority"].to<JsonArray>();
+      for (int i = 0; i < AUTOMATION_SOURCE_COUNT; i++) {
+        prio.add(automationSourceKey(automationPriorityOrder[i]));
+      }
+
+      JsonObject val = adm["validation"].to<JsonObject>();
+      val["loginEnabled"] = loginEnabled;
+      val["loginMode"] = loginMode;
+      val["verifyEnabled"] = verifyEnabled;
+      val["maxAttempts"] = maxLoginAttempts;
+      val["lockoutMode"] = lockoutMode;
+
+      JsonObject rs = adm["restartSchedule"].to<JsonObject>();
+      rs["enabled"] = restartScheduleEnabled;
+      rs["minute"] = restartScheduleMinute;
+      rs["dayMask"] = restartScheduleDayMask;
+
+      JsonObject apiObj = doc["api"].to<JsonObject>();
+      apiObj["enabled"] = apiKeyEnabled;
+      apiObj["apiKey"] = configuredApiKey;
+
+      // 3. Network IP settings (WiFi SSID/pass excluded for safety)
+      JsonObject net = doc["network"].to<JsonObject>();
+      net["dhcp"] = dhcpOn;
+      net["staticIp"] = sIp;
+      net["staticMask"] = sMask;
+      net["staticGw"] = sGw;
+      net["staticDns"] = sDns;
+
+      // 4. Recurring Schedules, Future Schedules & Sensors
+      Preferences pSched, pFuture, pSensor, pUsers;
+      pSched.begin("sched", true);
+      pFuture.begin("fsched", true);
+      pSensor.begin("sensor", true);
+
+      JsonArray schedArr = doc["schedules"].to<JsonArray>();
+      JsonArray fschedArr = doc["futureSchedules"].to<JsonArray>();
+      JsonArray sensArr = doc["sensors"].to<JsonArray>();
+
+      for (int i = 0; i < NUM_SWITCHES; i++) {
+        JsonDocument tmp;
+        if (!deserializeJson(tmp, pSched.getString(("s" + String(i)).c_str(), "[]")) &&
+            tmp.is<JsonArray>()) {
+          schedArr.add(tmp.as<JsonArray>());
+        } else {
+          schedArr.add<JsonArray>();
+        }
+
+        tmp.clear();
+        if (!deserializeJson(tmp, pFuture.getString(("f" + String(i)).c_str(), "[]")) &&
+            tmp.is<JsonArray>()) {
+          fschedArr.add(tmp.as<JsonArray>());
+        } else {
+          fschedArr.add<JsonArray>();
+        }
+
+        JsonObject sObj = sensArr.add<JsonObject>();
+        const char *keys[3] = {"temp", "humid", "sun"};
+        const char prefixes[3] = {'t', 'h', 'x'};
+        for (int k = 0; k < 3; k++) {
+          String raw = pSensor.getString((String(prefixes[k]) + String(i)).c_str(), "");
+          tmp.clear();
+          if (!raw.isEmpty() && !deserializeJson(tmp, raw) && tmp.is<JsonObject>()) {
+            sObj[keys[k]] = tmp.as<JsonObject>();
+          }
+        }
+      }
+      pSched.end();
+      pFuture.end();
+      pSensor.end();
+
+      // 5. Users
+      pUsers.begin("users", true);
+      int uCnt = pUsers.getInt("cnt", 0);
+      JsonArray uArr = doc["users"].to<JsonArray>();
+      for (int i = 0; i < uCnt; i++) {
+        String raw = pUsers.getString(("u" + String(i)).c_str(), "");
+        if (raw.isEmpty())
+          continue;
+        JsonDocument tmp;
+        if (!deserializeJson(tmp, raw) && tmp.is<JsonObject>()) {
+          uArr.add(tmp.as<JsonObject>());
+        }
+      }
+      pUsers.end();
+
+      AsyncResponseStream *response = req->beginResponseStream("application/json");
+      serializeJson(doc, *response);
+      req->send(response);
+    });
+
+    server.on(
+        "/api/admin/backup/import", HTTP_POST,
+        [](AsyncWebServerRequest *req) {
+          char *bodyBuf = static_cast<char *>(req->_tempObject);
+          req->_tempObject = nullptr;
+          if (!bodyBuf || bodyBuf[0] == '\0') {
+            free(bodyBuf);
+            req->send(400, "application/json",
+                      "{\"ok\":false,\"error\":\"Empty, oversized, or low-memory backup payload (max 16KB)\"}");
+            return;
+          }
+
+          JsonDocument doc;
+          DeserializationError err = deserializeJson(doc, bodyBuf);
+          free(bodyBuf);
+          if (err || doc.overflowed()) {
+            req->send(400, "application/json",
+                      "{\"ok\":false,\"error\":\"Invalid or too-large JSON backup file\"}");
+            return;
+          }
+
+          String adminUser = doc["adminUser"].as<String>();
+          String adminPass = doc["adminPass"].as<String>();
+          if (!verifyAdminCredentialsStrict(req, adminUser, adminPass))
+            return;
+
+          if (!doc["backup"].is<JsonObject>()) {
+            req->send(400, "application/json",
+                      "{\"ok\":false,\"error\":\"Missing backup object\"}");
+            return;
+          }
+          JsonObject b = doc["backup"].as<JsonObject>();
+          Preferences localPrefs;
+
+          // 1. Restore Switches
+          if (b["switches"].is<JsonArray>()) {
+            JsonArray swArr = b["switches"].as<JsonArray>();
+            localPrefs.begin("sw", false);
+            for (int i = 0; i < NUM_SWITCHES && i < (int)swArr.size(); i++) {
+              if (!swArr[i].is<JsonObject>())
+                continue;
+              JsonObject o = swArr[i].as<JsonObject>();
+              if (o["name"].is<const char *>()) {
+                String nm = o["name"].as<String>();
+                if (nm.length() > 32)
+                  nm = nm.substring(0, 32);
+                localPrefs.putString(("n" + String(i)).c_str(), nm);
+              }
+              if (o["icon"].is<const char *>()) {
+                localPrefs.putString(("i" + String(i)).c_str(),
+                                     o["icon"].as<String>());
+              }
+              if (o["relayMode"].is<const char *>()) {
+                String rm = o["relayMode"].as<String>();
+                if (rm != "on" && rm != "remember")
+                  rm = "off";
+                localPrefs.putString(("r" + String(i)).c_str(), rm);
+              }
+              if (o["actionMode"].is<const char *>()) {
+                String am = o["actionMode"].as<String>();
+                am = (am == "sync") ? "sync" : "toggle";
+                localPrefs.putString(("m" + String(i)).c_str(), am);
+              }
+            }
+            localPrefs.end();
+          }
+
+          // 2. Restore Admin & API Key
+          localPrefs.begin("admin", false);
+          if (b["admin"].is<JsonObject>()) {
+            JsonObject adm = b["admin"].as<JsonObject>();
+            if (adm["deviceName"].is<const char *>()) {
+              String dn = adm["deviceName"].as<String>();
+              dn.trim();
+              if (!dn.isEmpty() && dn.length() <= 32)
+                localPrefs.putString("devname", dn);
+            }
+            if (adm["mdns"].is<const char *>()) {
+              String mn = adm["mdns"].as<String>();
+              mn.trim();
+              if (!mn.isEmpty() && mn.length() <= 32)
+                localPrefs.putString("mdns", mn);
+            }
+            if (adm["ntp"].is<const char *>())
+              localPrefs.putString("ntp", adm["ntp"].as<String>());
+            if (adm["tz"].is<const char *>())
+              localPrefs.putString("tz", adm["tz"].as<String>());
+            if (adm["timeFormat"].is<const char *>()) {
+              String tf = adm["timeFormat"].as<String>();
+              localPrefs.putString("tFmt", (tf == "12h") ? "12h" : "24h");
+            }
+            if (adm["lat"].is<float>() && adm["lon"].is<float>()) {
+              localPrefs.putFloat("lat", adm["lat"].as<float>());
+              localPrefs.putFloat("lon", adm["lon"].as<float>());
+            }
+            if (adm["showTemp"].is<bool>())
+              localPrefs.putBool("shwT", adm["showTemp"].as<bool>());
+            if (adm["showHumid"].is<bool>())
+              localPrefs.putBool("shwH", adm["showHumid"].as<bool>());
+            if (adm["tempPrec"].is<int>())
+              localPrefs.putInt("prcT", adm["tempPrec"].as<int>());
+            if (adm["humidPrec"].is<int>())
+              localPrefs.putInt("prcH", adm["humidPrec"].as<int>());
+
+            if (adm["schedulePriority"].is<JsonArray>()) {
+              JsonArray prio = adm["schedulePriority"].as<JsonArray>();
+              if (prio.size() == AUTOMATION_SOURCE_COUNT) {
+                uint8_t ord[AUTOMATION_SOURCE_COUNT];
+                bool okOrd = true;
+                for (int i = 0; i < AUTOMATION_SOURCE_COUNT; i++) {
+                  int src = automationSourceFromKey(prio[i].as<String>());
+                  if (src < 0) {
+                    okOrd = false;
+                    break;
+                  }
+                  ord[i] = (uint8_t)src;
+                }
+                if (okOrd && validateAutomationPriorityOrder(ord)) {
+                  for (int i = 0; i < AUTOMATION_SOURCE_COUNT; i++) {
+                    localPrefs.putInt(("pr" + String(i)).c_str(), ord[i]);
+                  }
+                }
+              }
+            }
+
+            if (adm["validation"].is<JsonObject>()) {
+              JsonObject val = adm["validation"].as<JsonObject>();
+              if (val["loginEnabled"].is<bool>())
+                localPrefs.putBool("valLogEn", val["loginEnabled"].as<bool>());
+              if (val["loginMode"].is<const char *>()) {
+                String lm = val["loginMode"].as<String>();
+                localPrefs.putString("valLogMd",
+                                     (lm == "everytime") ? "everytime" : "sessional");
+              }
+              if (val["verifyEnabled"].is<bool>())
+                localPrefs.putBool("valVerEn", val["verifyEnabled"].as<bool>());
+              if (val["maxAttempts"].is<int>()) {
+                int ma = val["maxAttempts"].as<int>();
+                if (ma >= 1 && ma <= 5)
+                  localPrefs.putInt("valMaxAtt", ma);
+              }
+              if (val["lockoutMode"].is<const char *>()) {
+                String lkm = val["lockoutMode"].as<String>();
+                localPrefs.putString("valLockMd",
+                                     (lkm == "restart_only") ? "restart_only" : "restart_or_1h");
+              }
+            }
+
+            if (adm["restartSchedule"].is<JsonObject>()) {
+              JsonObject rs = adm["restartSchedule"].as<JsonObject>();
+              bool rsEn = rs["enabled"].as<bool>();
+              int rsMin = rs["minute"] | -1;
+              uint8_t rsMask = (uint8_t)(rs["dayMask"] | 0);
+              if (rsEn && rsMin >= 0 && rsMin <= 1439 && rsMask != 0) {
+                localPrefs.putBool("rsEn", true);
+                localPrefs.putInt("rsMin", rsMin);
+                localPrefs.putUInt("rsMask", rsMask);
+              } else {
+                localPrefs.remove("rsEn");
+                localPrefs.remove("rsMin");
+                localPrefs.remove("rsMask");
+              }
+              localPrefs.remove("rsLast");
+            }
+          }
+
+          if (b["api"].is<JsonObject>()) {
+            JsonObject apiObj = b["api"].as<JsonObject>();
+            if (apiObj["enabled"].is<bool>()) {
+              apiKeyEnabled = apiObj["enabled"].as<bool>();
+              localPrefs.putBool("apiEn", apiKeyEnabled);
+            }
+            if (apiObj["apiKey"].is<const char *>()) {
+              String restoredKey = apiObj["apiKey"].as<String>();
+              restoredKey.trim();
+              if (restoredKey.length() >= 16) {
+                configuredApiKey = restoredKey;
+                localPrefs.putString("apiKey", configuredApiKey);
+              }
+            }
+          }
+          localPrefs.end();
+
+          // 3. Restore Network IP config (keeps existing WiFi SSID/pass)
+          if (b["network"].is<JsonObject>()) {
+            JsonObject net = b["network"].as<JsonObject>();
+            localPrefs.begin("wfcfg", false);
+            bool dOn = net["dhcp"].is<bool>() ? net["dhcp"].as<bool>() : true;
+            localPrefs.putBool("dhcp", dOn);
+            if (!dOn) {
+              String ip = net["staticIp"].as<String>();
+              String mk = net["staticMask"].as<String>();
+              String gw = net["staticGw"].as<String>();
+              String dn = net["staticDns"].as<String>();
+              IPAddress tIp, tMk, tGw, tDn;
+              if (tIp.fromString(ip) && tMk.fromString(mk) &&
+                  tGw.fromString(gw) && tDn.fromString(dn)) {
+                localPrefs.putString("sip", ip);
+                localPrefs.putString("mask", mk);
+                localPrefs.putString("gw", gw);
+                localPrefs.putString("dns", dn);
+              } else {
+                localPrefs.putBool("dhcp", true);
+              }
+            }
+            localPrefs.end();
+          }
+
+          // 4. Restore Schedules, Future Schedules & Sensors
+          if (b["schedules"].is<JsonArray>()) {
+            JsonArray arr = b["schedules"].as<JsonArray>();
+            localPrefs.begin("sched", false);
+            for (int i = 0; i < NUM_SWITCHES && i < (int)arr.size(); i++) {
+              if (!arr[i].is<JsonArray>())
+                continue;
+              String out;
+              serializeJson(arr[i], out);
+              localPrefs.putString(("s" + String(i)).c_str(), out);
+            }
+            localPrefs.end();
+          }
+          if (b["futureSchedules"].is<JsonArray>()) {
+            JsonArray arr = b["futureSchedules"].as<JsonArray>();
+            localPrefs.begin("fsched", false);
+            for (int i = 0; i < NUM_SWITCHES && i < (int)arr.size(); i++) {
+              if (!arr[i].is<JsonArray>())
+                continue;
+              String out;
+              serializeJson(arr[i], out);
+              localPrefs.putString(("f" + String(i)).c_str(), out);
+            }
+            localPrefs.end();
+          }
+          if (b["sensors"].is<JsonArray>()) {
+            JsonArray arr = b["sensors"].as<JsonArray>();
+            localPrefs.begin("sensor", false);
+            const char *keys[3] = {"temp", "humid", "sun"};
+            const char prefixes[3] = {'t', 'h', 'x'};
+            for (int i = 0; i < NUM_SWITCHES && i < (int)arr.size(); i++) {
+              if (!arr[i].is<JsonObject>())
+                continue;
+              JsonObject sObj = arr[i].as<JsonObject>();
+              for (int k = 0; k < 3; k++) {
+                String nvsKey = String(prefixes[k]) + String(i);
+                if (sObj[keys[k]].is<JsonObject>()) {
+                  String out;
+                  serializeJson(sObj[keys[k]], out);
+                  localPrefs.putString(nvsKey.c_str(), out);
+                } else {
+                  localPrefs.remove(nvsKey.c_str());
+                }
+              }
+            }
+            localPrefs.end();
+          }
+
+          // 5. Restore Users (only if backup contains at least 1 valid admin)
+          if (b["users"].is<JsonArray>()) {
+            JsonArray uArr = b["users"].as<JsonArray>();
+            String restoredAdminId = "";
+            String restoredAdminPass = "";
+            for (JsonVariant v : uArr) {
+              if (!v.is<JsonObject>())
+                continue;
+              if (normalizeUserRole(v["role"].as<String>()) == "admin") {
+                String uid = normalizeUserId(v["id"].as<String>());
+                String upass = normalizeUserPass(v["pass"].as<String>());
+                if (!uid.isEmpty() && !upass.isEmpty()) {
+                  restoredAdminId = uid;
+                  restoredAdminPass = upass;
+                  break;
+                }
+              }
+            }
+            if (!restoredAdminId.isEmpty()) {
+              localPrefs.begin("users", false);
+              localPrefs.clear();
+              int idx = 0;
+              for (JsonVariant v : uArr) {
+                if (!v.is<JsonObject>())
+                  continue;
+                String uid = normalizeUserId(v["id"].as<String>());
+                String upass = normalizeUserPass(v["pass"].as<String>());
+                if (uid.isEmpty() || upass.isEmpty())
+                  continue;
+                JsonDocument uDoc;
+                uDoc["id"] = uid;
+                uDoc["pass"] = upass;
+                uDoc["role"] = normalizeUserRole(v["role"].as<String>());
+                String uStr;
+                serializeJson(uDoc, uStr);
+                localPrefs.putString(("u" + String(idx)).c_str(), uStr);
+                idx++;
+              }
+              localPrefs.putInt("cnt", idx);
+              localPrefs.end();
+              persistConfiguredPrimaryAdmin(restoredAdminId, restoredAdminPass);
+            }
+          }
+
+          notifyStorage();
+          req->send(200, "application/json",
+                    "{\"ok\":true,\"msg\":\"Backup imported successfully! Device restarting...\"}");
+          restartFlag = true;
+          restartAt = millis() + 1500;
+        },
+        NULL,
+        [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {
+          if (index == 0) {
+            if (total == 0 || total > 16384 ||
+                ESP.getFreeHeap() < (total * 2 + 16000) ||
+                ESP.getMaxAllocHeap() < (total + 4096)) {
+              req->_tempObject = nullptr;
+              return;
+            }
+            char *buf = static_cast<char *>(malloc(total + 1));
+            if (!buf) {
+              req->_tempObject = nullptr;
+              return;
+            }
+            buf[0] = '\0';
+            buf[total] = '\0';
+            req->_tempObject = buf;
+          }
+          if (req->_tempObject) {
+            if (index + len <= total) {
+              memcpy(static_cast<char *>(req->_tempObject) + index, data, len);
+            } else {
+              free(req->_tempObject);
+              req->_tempObject = nullptr;
+            }
+          }
+        });
 
     server.on("/api/admin/performance", HTTP_GET, [](AsyncWebServerRequest *req) {
       JsonDocument d;
@@ -4152,15 +4657,22 @@ void loop() {
     WiFi.setSleep(false);
     setupWebServer(); // Safe: never duplicates routes or kills active sockets
     MDNS.end();
-    if (MDNS.begin(mdnsName.c_str())) {
+    bool mdnsStarted = MDNS.begin(mdnsName.c_str());
+    if (mdnsStarted) {
       MDNS.addService("http", "tcp", 80);
+    }
+    Serial.println("[WIFI] Reconnected! IP: " + WiFi.localIP().toString());
+    Serial.println("[SERVER] Web server active after WiFi reconnect: http://" +
+                   WiFi.localIP().toString());
+    if (mdnsStarted) {
+      Serial.println("[MDNS] Restarted: http://" + mdnsName + ".local");
     }
     syncTime();
   }
 
   if (ntpResyncPending) {
     ntpResyncPending = false;
-    syncTime();
+    syncTime(true); // Forced single SNTP request
     sunCalcPending = true;
   }
 
@@ -4171,6 +4683,9 @@ void loop() {
 
   if (syncTimestampPending) {
     syncTimestampPending = false;
+    lastCheckedMinute = -1;
+    lastSchedCheck = 0;
+    lastCalcDay = -1;
     updateLastSyncTimestamp();
   }
 

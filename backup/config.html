@@ -3917,6 +3917,77 @@
           </div>
         </div>
 
+        <!-- Backup & Restore -->
+        <div class="panel" id="panel-admin-backup">
+          <div class="panel-title">Backup &amp; Restore</div>
+          <div class="info-box">
+            <strong>Full JSON Configuration Backup</strong> — Exports and
+            restores Switches, Automations, Sensors, Time, Location, mDNS,
+            Device Name, Validation, Users, IP Settings, and your
+            <strong>API Key</strong> (so connected devices keep working). Wi-Fi
+            SSID &amp; password are kept unchanged for safety. Strictly requires
+            <strong>Admin Verification</strong>.
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Export Configuration</div>
+              <div class="setting-sub">
+                Download all settings and API Key as a JSON file
+              </div>
+            </div>
+            <button
+              type="button"
+              class="cfg-btn cfg-btn-primary"
+              onclick="exportBackupJson()"
+            >
+              Export JSON
+            </button>
+          </div>
+
+          <div
+            class="setting-row"
+            style="flex-direction: column; align-items: flex-start; gap: 12px"
+          >
+            <div class="setting-info">
+              <div class="setting-label">Import Configuration</div>
+              <div class="setting-sub">
+                Select a previously exported JSON backup file to restore
+              </div>
+            </div>
+            <input
+              type="file"
+              id="backupImportFile"
+              accept=".json,application/json"
+              class="cfg-input"
+              style="max-width: 100%; padding: 8px"
+              onchange="onBackupFileSelected(this)"
+            />
+            <div
+              id="backupImportPreview"
+              class="setting-sub"
+              style="
+                color: #7dd3fc;
+                font-family: monospace;
+                white-space: pre-line;
+              "
+            ></div>
+            <div style="width: 100%; text-align: right">
+              <button
+                type="button"
+                id="importBackupBtn"
+                class="cfg-btn cfg-btn-danger"
+                onclick="importBackupJson()"
+                disabled
+              >
+                Import &amp; Restore
+              </button>
+            </div>
+          </div>
+
+          <div id="backupStatusMsg" style="margin-top: 12px"></div>
+        </div>
+
         <!-- Restart -->
         <div class="panel" id="panel-admin-restart">
           <div class="panel-title">Restart Device</div>
@@ -4038,6 +4109,7 @@
       <div class="modal-box">
         <div
           class="modal-title"
+          id="passwordModalTitle"
           style="
             font-size: 1rem;
             font-weight: 600;
@@ -4465,7 +4537,7 @@
 
     <div class="footer">
       ESP32 Smart Home Dashboard<br />
-      <span>Developer &copy; M.Maity</span>
+      <span>Developer &copy; M.Maity | iotBrainStorm</span>
     </div>
 
     <div
@@ -4699,6 +4771,7 @@
           { label: "Location Setup", panel: "panel-admin-location" },
           { label: "Validation", panel: "panel-admin-validation" },
           { label: "Performance", panel: "panel-admin-performance" },
+          { label: "Backup & Restore", panel: "panel-admin-backup" },
           { label: "Restart", panel: "panel-admin-restart" },
           { label: "Reset Storage", panel: "panel-admin-storage" },
           { label: "Reset Settings", panel: "panel-admin-settings" },
@@ -7019,20 +7092,6 @@
       ══════════════════════════════════════════════════════════════ */
       var passwordModal = document.getElementById("passwordModal");
       var passwordModalMsg = document.getElementById("passwordModalMsg");
-      var confirmPasswordInput = document.getElementById(
-        "confirmPasswordInput",
-      );
-      var pendingPasswordAction = null;
-      var pendingActionData = null;
-
-      var validationState = {
-        loginEnabled: true,
-        loginMode: "sessional",
-        verifyEnabled: true,
-      };
-
-      var passwordModal = document.getElementById("passwordModal");
-      var passwordModalMsg = document.getElementById("passwordModalMsg");
       var passwordModalStatus = document.getElementById("passwordModalStatus");
       var passwordModalConfirmBtn = document.getElementById(
         "passwordModalConfirmBtn",
@@ -7130,11 +7189,21 @@
         pendingPasswordAction = action;
         pendingActionData = data;
         pendingRequiresAdmin = /admin/i.test(message || "");
+        var modalTitleEl = document.getElementById("passwordModalTitle");
+        if (modalTitleEl) {
+          modalTitleEl.textContent = pendingRequiresAdmin
+            ? "Admin Verification"
+            : "User Verification";
+        }
         var adminUserInput = document.getElementById("confirmAdminUser");
         adminUserInput.placeholder = pendingRequiresAdmin
           ? "Admin ID"
           : "User ID";
-        adminUserInput.value = sessionStorage.getItem("smartHomeUser") || "";
+        var savedRole = sessionStorage.getItem("smartHomeRole") || "";
+        adminUserInput.value =
+          !pendingRequiresAdmin || savedRole === "admin"
+            ? sessionStorage.getItem("smartHomeUser") || ""
+            : "";
         confirmPasswordInput.value = "";
         if (passwordModalStatus) passwordModalStatus.textContent = "";
         if (passwordModalConfirmBtn) passwordModalConfirmBtn.disabled = false;
@@ -7263,6 +7332,8 @@
                   alert("Connection error");
                 });
             },
+            null,
+            true,
           );
         } else if (actionType === "remove") {
           showPasswordModal(
@@ -7290,6 +7361,7 @@
                 });
             },
             userId,
+            true,
           );
         } else if (actionType === "editAdmin") {
           var editAdminId = document.getElementById("editAdminId").value.trim();
@@ -7327,6 +7399,8 @@
                   alert("Connection error");
                 });
             },
+            null,
+            true,
           );
         }
       }
@@ -7735,6 +7809,187 @@
               })
               .catch(function () {
                 alert("Connection error");
+              });
+          },
+          null,
+          true,
+        );
+      }
+
+      /* ══════════════════════════════════════════════════════════════
+         JSON BACKUP & RESTORE (ADMIN VERIFIED, INCLUDES API KEY)
+      ══════════════════════════════════════════════════════════════ */
+      var parsedBackupData = null;
+
+      function setBackupStatus(msg, isError) {
+        var el = document.getElementById("backupStatusMsg");
+        if (!el) return;
+        el.innerHTML = msg
+          ? '<div class="' +
+            (isError ? "schedule-error" : "schedule-success") +
+            '">' +
+            escapeHtml(msg) +
+            "</div>"
+          : "";
+      }
+
+      function exportBackupJson() {
+        setBackupStatus("", false);
+        showPasswordModal(
+          "Enter admin credentials to export JSON",
+          function (data, adminUser, adminPass) {
+            apiPost(
+              "/api/admin/backup/export",
+              appendAdminCredentials("export=1", adminUser, adminPass),
+            )
+              .then(function (d) {
+                if (!d || !d.ok) {
+                  setBackupStatus(
+                    (d && d.error) || "Backup export failed",
+                    true,
+                  );
+                  return;
+                }
+                var exportObj = Object.assign({}, d);
+                delete exportObj.ok;
+                var jsonText = JSON.stringify(exportObj, null, 2);
+                var dev =
+                  (exportObj.admin && exportObj.admin.deviceName) || "esp32";
+                var safeDev = String(dev).replace(/[^a-zA-Z0-9_-]/g, "_");
+                var now = new Date();
+                var stamp =
+                  now.getFullYear() +
+                  String(now.getMonth() + 1).padStart(2, "0") +
+                  String(now.getDate()).padStart(2, "0");
+
+                var blob = new Blob([jsonText], { type: "application/json" });
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement("a");
+                a.href = url;
+                a.download =
+                  "smarthome-backup-" + safeDev + "-" + stamp + ".json";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                setBackupStatus(
+                  "Backup exported successfully (including API Key)!",
+                  false,
+                );
+              })
+              .catch(function () {
+                setBackupStatus("Connection error during export", true);
+              });
+          },
+          null,
+          true,
+        );
+      }
+
+      function onBackupFileSelected(input) {
+        var previewEl = document.getElementById("backupImportPreview");
+        var importBtn = document.getElementById("importBackupBtn");
+        parsedBackupData = null;
+        if (importBtn) importBtn.disabled = true;
+        if (previewEl) previewEl.textContent = "";
+        setBackupStatus("", false);
+
+        if (!input || !input.files || !input.files[0]) return;
+        var file = input.files[0];
+        if (file.size > 15000) {
+          setBackupStatus("File too large (max 15 KB).", true);
+          return;
+        }
+
+        var reader = new FileReader();
+        reader.onload = function (e) {
+          try {
+            var obj = JSON.parse(e.target.result);
+            if (
+              !obj ||
+              typeof obj !== "object" ||
+              !obj.switches ||
+              !obj.admin
+            ) {
+              setBackupStatus("Invalid Smart Home backup file format.", true);
+              return;
+            }
+            parsedBackupData = obj;
+            var hasApi = !!(obj.api && obj.api.apiKey);
+            if (previewEl) {
+              previewEl.textContent =
+                "Device: " +
+                (obj.admin.deviceName || "Unknown") +
+                " | mDNS: " +
+                (obj.admin.mdns || "smarthome") +
+                ".local\nSwitches: " +
+                obj.switches.length +
+                " | API Key Included: " +
+                (hasApi ? "Yes" : "No");
+            }
+            if (importBtn) importBtn.disabled = false;
+          } catch (err) {
+            setBackupStatus("Could not parse JSON file.", true);
+          }
+        };
+        reader.readAsText(file);
+      }
+
+      function importBackupJson() {
+        if (!parsedBackupData) {
+          setBackupStatus(
+            "Please select a valid JSON backup file first.",
+            true,
+          );
+          return;
+        }
+        if (
+          !confirm(
+            "Restore all settings and API Key from this backup?\n\nCurrent settings will be overwritten and the ESP32 will restart.",
+          )
+        ) {
+          return;
+        }
+
+        showPasswordModal(
+          "Enter admin credentials to import & restore JSON backup",
+          function (data, adminUser, adminPass) {
+            setBackupStatus("Uploading and restoring backup...", false);
+            fetch("/api/admin/backup/import", {
+              method: "POST",
+              cache: "no-store",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Session-Token": getStoredSessionToken(),
+              },
+              body: JSON.stringify({
+                adminUser: adminUser,
+                adminPass: adminPass,
+                backup: parsedBackupData,
+              }),
+            })
+              .then(function (r) {
+                return r.json().catch(function () {
+                  return { ok: false, error: "HTTP " + r.status };
+                });
+              })
+              .then(function (d) {
+                if (d && d.ok) {
+                  setBackupStatus(
+                    d.msg || "Backup imported! Restarting device...",
+                    false,
+                  );
+                  startRestartProgress(20);
+                } else {
+                  setBackupStatus(
+                    (d && d.error) || "Backup import failed",
+                    true,
+                  );
+                }
+              })
+              .catch(function () {
+                setBackupStatus("Connection error during import", true);
               });
           },
           null,
@@ -8424,6 +8679,8 @@
                 alert("Connection error");
               });
           },
+          null,
+          true,
         );
       }
 
@@ -8504,17 +8761,44 @@
             encodeURIComponent(timeFormat),
         )
           .then(function (d) {
-            if (d && d.lastSynced) {
-              updateLastSyncedUi(d.lastSynced);
+            if (!d || !d.ok) {
+              if (btn) {
+                btn.disabled = false;
+                btn.textContent = "Sync";
+              }
+              alert((d && d.error) || "Time sync failed");
+              return;
             }
-            setTimeout(function () {
-              loadTimeSettings().then(function () {
-                if (btn) {
-                  btn.disabled = false;
-                  btn.textContent = "Sync";
-                }
-              });
-            }, 1500);
+            var prevSeq = Number(d.syncSeq || 0);
+            var attempts = 0;
+            var poll = function () {
+              attempts++;
+              apiGet("/api/admin/time")
+                .then(function (t) {
+                  if (t && t.lastSynced) updateLastSyncedUi(t.lastSynced);
+                  var curSeq = Number((t && t.syncSeq) || 0);
+                  if (curSeq > prevSeq || attempts >= 8) {
+                    if (btn) {
+                      btn.disabled = false;
+                      btn.textContent = "Sync";
+                    }
+                    if (curSeq <= prevSeq) {
+                      alert(
+                        "NTP server did not respond in time. Check internet or try time.google.com.",
+                      );
+                    }
+                  } else {
+                    setTimeout(poll, 1000);
+                  }
+                })
+                .catch(function () {
+                  if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = "Sync";
+                  }
+                });
+            };
+            setTimeout(poll, 1000);
           })
           .catch(function () {
             if (btn) {
@@ -9190,6 +9474,8 @@
                   alert("Connection error");
                 });
             },
+            null,
+            true,
           );
         }
       }
@@ -9556,6 +9842,8 @@
                       alert("Connection error");
                     });
                 },
+                null,
+                true,
               );
             });
           }
@@ -9787,16 +10075,3 @@
     </script>
   </body>
 </html>
-
-<!-- // Access the API keys
-fetch("http://192.168.0.125/api/switch/toggle", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/x-www-form-urlencoded"
-  },
-  body: "index=0&state=toggle&key=sh_5003c0712e4ad3c9af2b1fd04efcf"
-})
-.then(r => r.json())
-.then(data => {
-  console.log("COMPUTER is now:", data.state ? "ON" : "OFF");
-}); -->
