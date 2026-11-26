@@ -104,6 +104,492 @@ bool portalFlag = false;
 
 SemaphoreHandle_t swStateMutex = nullptr;
 
+bool spiffsMounted = false;
+SemaphoreHandle_t fsMutex = nullptr;
+SemaphoreHandle_t uploadAuthMutex = nullptr;
+
+// /upload Security & 5s+10s Forget-BOOT Constants (ESP32 Dev Kit / SPIFFS)
+static constexpr size_t MAX_SMALL_JSON_BYTES = 1024;
+static constexpr uint32_t MIN_FREE_HEAP_FOR_UPLOAD = 16000;
+static constexpr uint8_t UPLOAD_AUTH_MAX_ATTEMPTS = 3;
+static constexpr unsigned long UPLOAD_SESSION_TTL_MS = 900000UL;       // 15 min inactivity timeout
+static constexpr unsigned long UPLOAD_FORGET_PRESS_WINDOW_MS = 5000UL; // 5s window to press BOOT
+static constexpr unsigned long UPLOAD_FORGET_HOLD_MS = 10000UL;        // 10s continuous hold
+static constexpr unsigned long UPLOAD_FORGET_DEBOUNCE_MS = 120UL;      // Switch bounce tolerance
+
+uint8_t uploadAuthFailedAttempts = 0;
+bool uploadAuthLocked = false;         // Resets ONLY on fresh hardware restart or BOOT Forget
+char uploadSessionToken[65] = "";      // 256-bit random hex token (64 chars + NUL)
+IPAddress uploadSessionIp(0, 0, 0, 0); // Token bound to client IP
+unsigned long uploadSessionLastSeenMs = 0;
+
+enum UploadForgetState : uint8_t {
+  UF_IDLE = 0,
+  UF_WAIT_PRESS,
+  UF_HOLDING,
+  UF_DONE,
+  UF_TIMEOUT,
+  UF_RELEASED_EARLY
+};
+UploadForgetState ufState = UF_IDLE;
+unsigned long ufWindowDeadlineMs = 0;
+unsigned long ufHoldStartMs = 0;
+unsigned long ufReleaseSinceMs = 0;
+char ufStatusMsg[96] = "";
+
+struct FsFileUploadSession {
+  bool active = false;
+  AsyncWebServerRequest *owner = nullptr;
+  File file;
+  char path[36] = "";
+  size_t bytesWritten = 0;
+  bool fileOpened = false;
+  bool ok = false;
+  char errorMsg[64] = "";
+};
+FsFileUploadSession fsUploadSession;
+
+struct SmallJsonBody {
+  char data[MAX_SMALL_JSON_BYTES + 1];
+  size_t len = 0;
+  bool overflow = false;
+};
+
+static const char UPLOAD_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smart Home Flash Uploader</title>
+<style>
+  :root{--bg:#0d1117;--card:#161b22;--bd:#30363d;--tx:#e6edf3;--mut:#8b949e;--acc:#2f81f7;--ok:#3fb950;--warn:#d29922;--err:#f85149}
+  *{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  body{margin:0;background:var(--bg);color:var(--tx);padding:20px}
+  .wrap{max-width:720px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:18px;margin-bottom:16px}
+  .hidden{display:none!important}
+  h1{margin:0 0 6px;font-size:20px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+  .sub{color:var(--mut);font-size:13px;margin:0 0 14px}
+  .field{margin-bottom:12px}
+  .field label{display:block;font-size:12px;color:var(--mut);margin-bottom:5px;font-weight:600}
+  .field input{width:100%;background:#0d1117;border:1px solid var(--bd);border-radius:8px;padding:10px 12px;color:var(--tx);font-size:14px;outline:none}
+  .field input:focus{border-color:var(--acc)}
+  .alert{padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:12px;border:1px solid var(--bd);background:#0d1117}
+  .alert.err{border-color:rgba(248,81,73,.5);background:rgba(248,81,73,.1);color:#ffa198}
+  .alert.ok{border-color:rgba(63,185,80,.5);background:rgba(63,185,80,.1);color:#7ee787}
+  .alert.warn{border-color:rgba(210,153,34,.5);background:rgba(210,153,34,.1);color:#f2cc60}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px}
+  .stat{background:#0d1117;border:1px solid var(--bd);border-radius:8px;padding:10px}
+  .stat b{display:block;font-size:15px;margin-top:2px}
+  .stat span{font-size:11px;color:var(--mut);text-transform:uppercase}
+  .bar{height:8px;background:#21262d;border-radius:99px;overflow:hidden}
+  .bar>div{height:100%;background:var(--acc);width:0%;transition:width .18s}
+  .drop{border:2px dashed var(--bd);border-radius:10px;padding:24px 16px;text-align:center;cursor:pointer;transition:.15s}
+  .drop.over{border-color:var(--acc);background:rgba(47,129,247,.08)}
+  .drop.has-files{border-color:var(--ok);background:rgba(63,185,80,.04);text-align:left;padding:16px}
+  .dz-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap}
+  .dz-list{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto}
+  .dz-item{display:flex;align-items:center;justify-content:space-between;gap:10px;background:#0d1117;border:1px solid var(--bd);border-radius:8px;padding:7px 10px;font-size:13px}
+  .dz-name{font-family:ui-monospace,Consolas,monospace;word-break:break-all}
+  .dz-meta{display:flex;align-items:center;gap:8px;flex-shrink:0}
+  .dz-sz{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--mut)}
+  .dz-rm{background:transparent;border:1px solid rgba(248,81,73,.4);color:var(--err);border-radius:6px;padding:2px 7px;font-size:12px;cursor:pointer}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center}
+  button,a.btn{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:9px 14px;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+  button.sec,a.sec{background:#21262d;border:1px solid var(--bd);color:var(--tx)}
+  button.warn{background:rgba(210,153,34,.18);border:1px solid rgba(210,153,34,.5);color:#f2cc60}
+  button.del{background:transparent;border:1px solid rgba(248,81,73,.4);color:var(--err);padding:4px 9px;font-size:12px}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  #log{margin-top:12px;font-family:ui-monospace,Consolas,monospace;font-size:12px;background:#0d1117;border:1px solid var(--bd);border-radius:8px;padding:10px;max-height:160px;overflow:auto;white-space:pre-wrap;display:none}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--bd)}
+  th{color:var(--mut);font-weight:600;font-size:12px}
+  td.sz{font-family:ui-monospace,Consolas,monospace;color:var(--mut);white-space:nowrap}
+  td.act{text-align:right;white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card" id="authCard" style="max-width:440px;margin:32px auto">
+    <h1><span>Protected Flash Uploader</span></h1>
+    <p class="sub">Sign in with an <b>Admin</b>. Maximum 3 failed attempts before hardware restart is required.</p>
+    <div id="authMsg" class="alert hidden"></div>
+    <form id="loginForm" onsubmit="doLogin(event)">
+      <div class="field">
+        <label for="uName">Admin Username</label>
+        <input id="uName" type="text" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="uPass">Password</label>
+        <input id="uPass" type="password" autocomplete="current-password" required>
+      </div>
+      <div class="row" style="justify-content:space-between">
+        <button id="loginBtn" type="submit">Unlock</button>
+        <button id="forgetBtn" type="button" class="warn" onclick="startForgetFlow()">Forget</button>
+      </div>
+    </form>
+
+    <div id="forgetBox" class="hidden" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--bd)">
+      <div id="forgetText" style="font-size:13px;font-weight:600;margin-bottom:8px"></div>
+      <div class="bar"><div id="forgetBar"></div></div>
+    </div>
+  </div>
+
+  <div id="uploaderApp" class="hidden">
+    <div class="card">
+      <h1>
+        <span>Flash Storage Uploader</span>
+        <span style="display:flex;gap:8px;flex-wrap:wrap">
+          <a class="btn sec" href="/">Open Home</a>
+          <button class="sec" onclick="rebootDevice()">Reboot</button>
+          <button class="del" onclick="doLogout()">Logout</button>
+        </span>
+      </h1>
+      <p class="sub">Drop all <b>.gz</b> / web files from your <code>data/</code> folder here to upload directly into SPIFFS flash.</p>
+      <div class="stats">
+        <div class="stat"><span>Board / FS</span><b id="stBoard">-</b></div>
+        <div class="stat"><span>Storage Used</span><b id="stUsed">-</b></div>
+        <div class="stat"><span>Storage Free</span><b id="stFree">-</b></div>
+        <div class="stat"><span>Free Heap</span><b id="stHeap">-</b></div>
+      </div>
+      <div class="bar"><div id="stBar"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="drop" id="dropZone" onclick="fileInput.click()">
+        <div id="dzEmpty">
+          <div style="font-size:15px;font-weight:600">Drag &amp; drop the files here</div>
+          <div style="font-size:12px;color:var(--mut);margin-top:4px">Supports multiple files (index.html.gz, config.html.gz, index.svg.gz, settings.svg.gz)</div>
+        </div>
+        <div id="dzFilled" class="hidden">
+          <div class="dz-head">
+            <span style="font-size:13px;font-weight:600;color:var(--ok)" id="dzSummary">0 files ready to upload</span>
+            <span style="font-size:12px;color:var(--mut)">Click or drop more files to add</span>
+          </div>
+          <div id="dropFileList" class="dz-list"></div>
+        </div>
+        <input id="fileInput" type="file" multiple style="display:none">
+      </div>
+      <div class="row">
+        <button id="upBtn" onclick="uploadQueued()" disabled>Upload (0)</button>
+        <button id="clrBtn" class="sec" onclick="clearQueue()" disabled>Clear Queue</button>
+        <button class="sec" onclick="loadList()">Refresh List</button>
+        <span id="upStatus" style="font-size:13px;color:var(--mut)"></span>
+      </div>
+      <div class="bar" style="margin-top:10px"><div id="upBar"></div></div>
+      <div id="log"></div>
+    </div>
+
+    <div class="card">
+      <h1 style="font-size:16px;margin-bottom:10px"><span>Files in Flash (<span id="fCount">0</span>)</span></h1>
+      <table>
+        <thead><tr><th>Path</th><th>Size</th><th style="text-align:right">Action</th></tr></thead>
+        <tbody id="fBody"><tr><td colspan="3" style="color:var(--mut)">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<script>
+let authToken = '';
+let queued = [];
+let forgetTimer = null;
+
+const authCard = document.getElementById('authCard');
+const authMsg = document.getElementById('authMsg');
+const loginBtn = document.getElementById('loginBtn');
+const forgetBtn = document.getElementById('forgetBtn');
+const forgetBox = document.getElementById('forgetBox');
+const forgetText = document.getElementById('forgetText');
+const forgetBar = document.getElementById('forgetBar');
+const uploaderApp = document.getElementById('uploaderApp');
+
+const dropZone = document.getElementById('dropZone');
+const dzEmpty = document.getElementById('dzEmpty');
+const dzFilled = document.getElementById('dzFilled');
+const dzSummary = document.getElementById('dzSummary');
+const dropFileList = document.getElementById('dropFileList');
+const fileInput = document.getElementById('fileInput');
+const upBtn = document.getElementById('upBtn');
+const clrBtn = document.getElementById('clrBtn');
+const upStatus = document.getElementById('upStatus');
+const upBar = document.getElementById('upBar');
+const logEl = document.getElementById('log');
+
+function escHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmtBytes(b){
+  if(b >= 1048576) return (b/1048576).toFixed(2)+' MB';
+  if(b >= 1024) return (b/1024).toFixed(1)+' KB';
+  return b+' B';
+}
+function showAuthAlert(type, msg){
+  authMsg.className = 'alert ' + type;
+  authMsg.textContent = msg;
+  authMsg.classList.remove('hidden');
+}
+function authHeaders(){
+  return authToken ? { 'X-Upload-Token': authToken } : {};
+}
+function lockUiToAuth(msg){
+  authToken = '';
+  uploaderApp.classList.add('hidden');
+  authCard.classList.remove('hidden');
+  if(msg) showAuthAlert('err', msg);
+}
+function addLog(msg){
+  logEl.style.display='block';
+  logEl.textContent += msg + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function renderDropZone(){
+  upBtn.textContent = 'Upload (' + queued.length + ')';
+  upBtn.disabled = queued.length === 0;
+  clrBtn.disabled = queued.length === 0;
+  if(!queued.length){
+    dropZone.classList.remove('has-files');
+    dzEmpty.classList.remove('hidden');
+    dzFilled.classList.add('hidden');
+    dropFileList.innerHTML = '';
+    return;
+  }
+  const totalBytes = queued.reduce((s, f) => s + f.size, 0);
+  dropZone.classList.add('has-files');
+  dzEmpty.classList.add('hidden');
+  dzFilled.classList.remove('hidden');
+  dzSummary.textContent = queued.length + ' file' + (queued.length > 1 ? 's' : '') + ' ready (' + fmtBytes(totalBytes) + ')';
+  dropFileList.innerHTML = queued.map((f, idx) =>
+    '<div class="dz-item" onclick="event.stopPropagation()">' +
+      '<span class="dz-name">' + escHtml(f.name) + '</span>' +
+      '<span class="dz-meta"><span class="dz-sz">' + fmtBytes(f.size) + '</span>' +
+      '<button type="button" class="dz-rm" title="Remove" onclick="removeQueued(' + idx + ',event)">&times;</button></span>' +
+    '</div>'
+  ).join('');
+}
+function addFilesToQueue(fileList){
+  const incoming = Array.from(fileList || []);
+  for(const f of incoming){
+    const existingIdx = queued.findIndex(x => x.name === f.name);
+    if(existingIdx >= 0) queued[existingIdx] = f;
+    else queued.push(f);
+  }
+  fileInput.value = '';
+  renderDropZone();
+}
+function removeQueued(idx, ev){
+  if(ev) ev.stopPropagation();
+  queued.splice(idx, 1);
+  renderDropZone();
+}
+function clearQueue(){
+  queued = [];
+  fileInput.value = '';
+  renderDropZone();
+}
+
+fileInput.addEventListener('change', e => addFilesToQueue(e.target.files));
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('over');
+  addFilesToQueue(e.dataTransfer.files);
+});
+
+async function checkAuthStatus(){
+  try{
+    const r = await fetch('/api/upload-auth/status', { cache:'no-store' });
+    const d = await r.json();
+    if(d.locked){
+      loginBtn.disabled = true;
+      showAuthAlert('err', 'LOCKED: Maximum 3 failed attempts reached. A fresh hardware restart of the ESP32 is required (or use Forget with physical BOOT button).');
+    } else {
+      loginBtn.disabled = false;
+      if(d.failedAttempts > 0){
+        showAuthAlert('warn', 'Failed attempts: ' + d.failedAttempts + '/3. Remaining: ' + d.remainingAttempts);
+      }
+    }
+  }catch(e){}
+}
+
+async function doLogin(ev){
+  ev.preventDefault();
+  const username = document.getElementById('uName').value.trim();
+  const password = document.getElementById('uPass').value;
+  loginBtn.disabled = true;
+  try{
+    const r = await fetch('/api/upload-auth/login', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ username, password })
+    });
+    const d = await r.json();
+    if(r.ok && d.ok && d.token){
+      authToken = d.token;
+      document.getElementById('uPass').value = '';
+      authMsg.classList.add('hidden');
+      authCard.classList.add('hidden');
+      uploaderApp.classList.remove('hidden');
+      await loadList();
+      return;
+    }
+    if(d.locked){
+      loginBtn.disabled = true;
+      showAuthAlert('err', d.error || 'LOCKED after 3 failed attempts. Fresh hardware restart required.');
+    } else {
+      loginBtn.disabled = false;
+      showAuthAlert('err', (d.error || 'Invalid credentials') + ' (' + d.remainingAttempts + ' attempt(s) left)');
+    }
+  }catch(e){
+    loginBtn.disabled = false;
+    showAuthAlert('err', 'Connection error: ' + e.message);
+  }
+}
+
+async function doLogout(){
+  try{ await fetch('/api/upload-auth/logout', { method:'POST', headers: authHeaders() }); }catch(e){}
+  clearQueue();
+  lockUiToAuth('');
+  showAuthAlert('ok', 'Logged out securely.');
+}
+
+async function startForgetFlow(){
+  if(forgetTimer){ clearInterval(forgetTimer); forgetTimer = null; }
+  forgetBtn.disabled = true;
+  forgetBox.classList.remove('hidden');
+  forgetBar.style.width = '0%';
+  forgetBar.style.background = 'var(--warn)';
+  forgetText.textContent = 'Arming hardware reset...';
+  try{
+    const r = await fetch('/api/upload-auth/forget/start', { method:'POST' });
+    const d = await r.json();
+    if(!r.ok || !d.ok){
+      forgetBtn.disabled = false;
+      forgetText.textContent = d.error || 'Could not start forget process.';
+      return;
+    }
+    forgetTimer = setInterval(pollForgetStatus, 250);
+    pollForgetStatus();
+  }catch(e){
+    forgetBtn.disabled = false;
+    forgetText.textContent = 'Request failed: ' + e.message;
+  }
+}
+
+async function pollForgetStatus(){
+  try{
+    const r = await fetch('/api/upload-auth/forget/status', { cache:'no-store' });
+    const d = await r.json();
+    if(d.state === 'wait_press'){
+      const rem = (d.remainingMs / 1000).toFixed(1);
+      forgetBar.style.background = 'var(--warn)';
+      forgetBar.style.width = Math.min(100, ((5000 - d.remainingMs) / 5000) * 100) + '%';
+      forgetText.textContent = 'Step 1/2: Press & hold onboard BOOT button within ' + rem + 's...';
+    } else if(d.state === 'holding'){
+      const held = (d.heldMs / 1000).toFixed(1);
+      forgetBar.style.background = 'var(--acc)';
+      forgetBar.style.width = Math.min(100, (d.heldMs / 10000) * 100) + '%';
+      forgetText.textContent = 'Step 2/2: Keep holding BOOT button... ' + held + 's / 10.0s';
+    } else {
+      clearInterval(forgetTimer);
+      forgetTimer = null;
+      forgetBtn.disabled = false;
+      if(d.state === 'done'){
+        forgetBar.style.background = 'var(--ok)';
+        forgetBar.style.width = '100%';
+        forgetText.textContent = 'Reset complete!';
+        loginBtn.disabled = false;
+        document.getElementById('uName').value = 'esp';
+        document.getElementById('uPass').value = '';
+        showAuthAlert('ok', 'All saved users erased! Default admin created: esp / 456456');
+      } else {
+        forgetBar.style.background = 'var(--err)';
+        forgetText.textContent = d.message || 'Reset cancelled.';
+        showAuthAlert('err', d.message || 'Hardware verification failed. Try again.');
+      }
+    }
+  }catch(e){}
+}
+
+async function uploadQueued(){
+  if(!queued.length || !authToken) return;
+  upBtn.disabled = true;
+  clrBtn.disabled = true;
+  logEl.textContent = '';
+  let okCount = 0;
+  for(let i=0;i<queued.length;i++){
+    const f = queued[i];
+    upStatus.textContent = 'Uploading ' + (i+1) + '/' + queued.length + ': ' + f.name;
+    upBar.style.width = Math.round((i / queued.length) * 100) + '%';
+    const fd = new FormData();
+    fd.append('file', f, f.name);
+    try{
+      const r = await fetch('/api/fs/upload', { method:'POST', headers: authHeaders(), body:fd });
+      if(r.status === 401){ lockUiToAuth('Session expired. Please login again.'); return; }
+      const j = await r.json();
+      if(r.ok && j.ok){
+        okCount++;
+        addLog('[OK] ' + j.path + ' (' + fmtBytes(j.bytes) + ')');
+      } else {
+        addLog('[ERR] ' + f.name + ': ' + (j.error || r.status));
+      }
+    }catch(err){
+      addLog('[ERR] ' + f.name + ': ' + err.message);
+    }
+  }
+  upBar.style.width = '100%';
+  upStatus.textContent = 'Done: ' + okCount + '/' + queued.length + ' uploaded.';
+  clearQueue();
+  await loadList();
+}
+
+async function delFile(path){
+  if(!confirm('Delete ' + path + '?')) return;
+  const r = await fetch('/api/fs/delete?path=' + encodeURIComponent(path), { method:'POST', headers: authHeaders() });
+  if(r.status === 401){ lockUiToAuth('Session expired. Please login again.'); return; }
+  if(r.ok) await loadList();
+}
+
+async function rebootDevice(){
+  if(!confirm('Reboot device now?')) return;
+  const r = await fetch('/api/fs/reboot', { method:'POST', headers: authHeaders() });
+  if(r.status === 401){ lockUiToAuth('Session expired. Please login again.'); return; }
+  upStatus.textContent = 'Rebooting...';
+}
+
+async function loadList(){
+  try{
+    const r = await fetch('/api/fs/list', { cache:'no-store', headers: authHeaders() });
+    if(r.status === 401){ lockUiToAuth('Session expired. Please login again.'); return; }
+    const d = await r.json();
+    document.getElementById('stBoard').textContent = d.board + ' / ' + d.fsType;
+    document.getElementById('stUsed').textContent = fmtBytes(d.usedBytes) + ' / ' + fmtBytes(d.totalBytes);
+    document.getElementById('stFree').textContent = fmtBytes(d.freeBytes);
+    document.getElementById('stHeap').textContent = fmtBytes(d.freeHeap);
+    const pct = d.totalBytes ? Math.min(100, (d.usedBytes / d.totalBytes) * 100) : 0;
+    document.getElementById('stBar').style.width = pct.toFixed(1) + '%';
+    document.getElementById('fCount').textContent = d.files.length;
+    const tb = document.getElementById('fBody');
+    if(!d.files.length){
+      tb.innerHTML = '<tr><td colspan="3" style="color:var(--mut)">No files in flash yet. Upload your data/ files above.</td></tr>';
+      return;
+    }
+    d.files.sort((a,b)=>a.name.localeCompare(b.name));
+    tb.innerHTML = d.files.map(f =>
+      '<tr><td>' + escHtml(f.name) + '</td><td class="sz">' + fmtBytes(f.size) +
+      '</td><td class="act"><button class="del" onclick="delFile(\'' + f.name.replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\')">Delete</button></td></tr>'
+    ).join('');
+  }catch(e){
+    document.getElementById('fBody').innerHTML = '<tr><td colspan="3" style="color:var(--err)">Failed to read flash list</td></tr>';
+  }
+}
+
+checkAuthStatus();
+</script>
+</body>
+</html>)rawliteral";
+
 const char *PRIMARY_ADMIN_ID = "esp";
 const char *PRIMARY_ADMIN_PASS = "456456";
 String configuredPrimaryAdminId = String(PRIMARY_ADMIN_ID);
@@ -211,6 +697,12 @@ bool lockSwState(TickType_t waitTicks = portMAX_DELAY);
 void unlockSwState();
 bool readSwState(int index);
 void writeSwState(int index, bool value);
+
+String normalizeUserRole(String role);
+String normalizeUserId(String id);
+String normalizeUserPass(String pass);
+bool consumeBootButtonHoldForReset();
+bool verifyLogin(const String &u, const String &p, String &role);
 
 // Restart cleanly on heap exhaustion instead of crashing via std::terminate()
 static void oomNewHandler() {
@@ -2392,6 +2884,332 @@ void checkPhysicalSwitches() {
   }
 }
 
+// ============================================================================
+// /upload AUTHENTICATION, 5s+10s FORGET-BOOT & SAFE SPIFFS UPLOAD HELPERS
+// ============================================================================
+String sanitizeUploadPath(String raw) {
+  raw.trim();
+  int slash = raw.lastIndexOf('/');
+  int bslash = raw.lastIndexOf('\\');
+  int cut = (slash > bslash) ? slash : bslash;
+  if (cut >= 0)
+    raw = raw.substring(cut + 1);
+  raw.trim();
+  // SPIFFS max path length on ESP32 is 31 chars including leading '/'
+  if (raw.isEmpty() || raw.indexOf("..") >= 0 || raw.length() > 30)
+    return "";
+  return String("/") + raw;
+}
+
+bool secureEquals(const char *a, const char *b) {
+  if (!a || !b)
+    return false;
+  size_t la = strlen(a);
+  size_t lb = strlen(b);
+  size_t maxLen = (la > lb) ? la : lb;
+  uint8_t diff = (uint8_t)(la ^ lb);
+  for (size_t i = 0; i < maxLen; i++) {
+    uint8_t ca = (i < la) ? (uint8_t)a[i] : 0;
+    uint8_t cb = (i < lb) ? (uint8_t)b[i] : 0;
+    diff |= (uint8_t)(ca ^ cb);
+  }
+  return diff == 0;
+}
+
+// Verifies against NVS "users" admin account (thread-safe local Preferences)
+bool verifyUploadAdminCredentials(const String &user, const String &pass) {
+  String cleanUser = normalizeUserId(user);
+  String cleanPass = normalizeUserPass(pass);
+  if (cleanUser.isEmpty() || cleanPass.isEmpty())
+    return false;
+
+  bool anyAdminFound = false;
+  bool matched = false;
+
+  Preferences localPrefs;
+  localPrefs.begin("users", true);
+  int count = localPrefs.getInt("cnt", 0);
+  for (int i = 0; i < count; i++) {
+    String js = localPrefs.getString(("u" + String(i)).c_str(), "");
+    if (js.isEmpty())
+      continue;
+    JsonDocument d;
+    if (deserializeJson(d, js))
+      continue;
+    if (normalizeUserRole(d["role"].as<String>()) != "admin")
+      continue;
+
+    String storedId = normalizeUserId(d["id"].as<String>());
+    String storedPass = normalizeUserPass(d["pass"].as<String>());
+    if (!storedId.isEmpty() && !storedPass.isEmpty()) {
+      anyAdminFound = true;
+      if (secureEquals(storedId.c_str(), cleanUser.c_str()) &&
+          secureEquals(storedPass.c_str(), cleanPass.c_str())) {
+        matched = true;
+      }
+    }
+  }
+  localPrefs.end();
+
+  if (!anyAdminFound) {
+    return secureEquals(cleanUser.c_str(), PRIMARY_ADMIN_ID) &&
+           secureEquals(cleanPass.c_str(), PRIMARY_ADMIN_PASS);
+  }
+  return matched;
+}
+
+void generateUploadSessionToken(IPAddress clientIp) {
+  uint8_t raw[32];
+  esp_fill_random(raw, sizeof(raw));
+  static const char HEX_CHARS[] = "0123456789abcdef";
+  for (int i = 0; i < 32; i++) {
+    uploadSessionToken[i * 2] = HEX_CHARS[(raw[i] >> 4) & 0x0F];
+    uploadSessionToken[i * 2 + 1] = HEX_CHARS[raw[i] & 0x0F];
+  }
+  uploadSessionToken[64] = '\0';
+  uploadSessionIp = clientIp;
+  uploadSessionLastSeenMs = millis();
+}
+
+void invalidateUploadSession() {
+  memset(uploadSessionToken, 0, sizeof(uploadSessionToken));
+  uploadSessionIp = IPAddress(0, 0, 0, 0);
+  uploadSessionLastSeenMs = 0;
+}
+
+bool isUploadRequestAuthorized(AsyncWebServerRequest *req) {
+  if (!req || !uploadAuthMutex)
+    return false;
+  if (!req->hasHeader("X-Upload-Token"))
+    return false;
+  String hdr = req->getHeader("X-Upload-Token")->value();
+  if (hdr.length() != 64)
+    return false;
+
+  bool ok = false;
+  if (xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+    if (!uploadAuthLocked && uploadSessionToken[0] != '\0') {
+      bool expired = (millis() - uploadSessionLastSeenMs) > UPLOAD_SESSION_TTL_MS;
+      bool ipMatch = (req->client() && req->client()->remoteIP() == uploadSessionIp);
+      if (!expired && ipMatch && secureEquals(uploadSessionToken, hdr.c_str())) {
+        uploadSessionLastSeenMs = millis();
+        ok = true;
+      } else if (expired) {
+        invalidateUploadSession();
+      }
+    }
+    xSemaphoreGive(uploadAuthMutex);
+  }
+  return ok;
+}
+
+// Erases ALL saved admin & normal users in NVS and creates ONLY default admin (esp / 456456)
+bool resetAllUsersForUploadForget() {
+  resetUsersToSingleDefaultAdmin();
+
+  if (uploadAuthMutex && xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(300)) == pdTRUE) {
+    uploadAuthFailedAttempts = 0;
+    uploadAuthLocked = false;
+    invalidateUploadSession();
+    xSemaphoreGive(uploadAuthMutex);
+  }
+
+  // Also clear main Smart Home login lockout so user is never stuck
+  failedAttempts = 0;
+  isLockedOut = false;
+  lockoutStartMs = 0;
+
+  Serial.printf("[AUTH] Hardware Forget Reset OK -> default admin '%s'\n", PRIMARY_ADMIN_ID);
+  return true;
+}
+
+void serviceUploadForgetButton() {
+  if (ufState != UF_WAIT_PRESS && ufState != UF_HOLDING)
+    return;
+
+  unsigned long now = millis();
+  bool pressed = (digitalRead(BOOT_BUTTON) == LOW);
+
+  if (ufState == UF_WAIT_PRESS) {
+    if (pressed) {
+      ufState = UF_HOLDING;
+      ufHoldStartMs = now;
+      ufReleaseSinceMs = 0;
+      digitalWrite(LED_PIN, HIGH);
+      digitalWrite(BUILTIN_LED_PIN, HIGH);
+      Serial.println("[AUTH] BOOT pressed in 5s window -> hold 10s to erase users");
+    } else if ((int32_t)(now - ufWindowDeadlineMs) >= 0) {
+      ufState = UF_TIMEOUT;
+      strncpy(ufStatusMsg, "Timed out: BOOT button was not pressed within 5 seconds.", sizeof(ufStatusMsg) - 1);
+      ufStatusMsg[sizeof(ufStatusMsg) - 1] = '\0';
+      digitalWrite(LED_PIN, LOW);
+      digitalWrite(BUILTIN_LED_PIN, LOW);
+    }
+    return;
+  }
+
+  if (ufState == UF_HOLDING) {
+    if (!pressed) {
+      if (ufReleaseSinceMs == 0)
+        ufReleaseSinceMs = now;
+      if (now - ufReleaseSinceMs >= UPLOAD_FORGET_DEBOUNCE_MS) {
+        ufState = UF_RELEASED_EARLY;
+        strncpy(ufStatusMsg, "Cancelled: BOOT button was released before 10 seconds.", sizeof(ufStatusMsg) - 1);
+        ufStatusMsg[sizeof(ufStatusMsg) - 1] = '\0';
+        digitalWrite(LED_PIN, LOW);
+        digitalWrite(BUILTIN_LED_PIN, LOW);
+        return;
+      }
+    } else {
+      ufReleaseSinceMs = 0;
+    }
+
+    if (now - ufHoldStartMs >= UPLOAD_FORGET_HOLD_MS) {
+      digitalWrite(LED_PIN, LOW);
+      digitalWrite(BUILTIN_LED_PIN, LOW);
+      resetAllUsersForUploadForget();
+      ufState = UF_DONE;
+      strncpy(ufStatusMsg, "All users erased. Default admin esp / 456456 created.", sizeof(ufStatusMsg) - 1);
+      ufStatusMsg[sizeof(ufStatusMsg) - 1] = '\0';
+      notifyStorage();
+    }
+  }
+}
+
+void handleSmallJsonBody(AsyncWebServerRequest *req, uint8_t *data, size_t len,
+                         size_t index, size_t total) {
+  if (index == 0) {
+    SmallJsonBody *buf = new (std::nothrow) SmallJsonBody();
+    req->_tempObject = buf;
+    req->onDisconnect([req]() {
+      if (req->_tempObject) {
+        delete static_cast<SmallJsonBody *>(req->_tempObject);
+        req->_tempObject = nullptr;
+      }
+    });
+    if (buf && total > MAX_SMALL_JSON_BYTES) {
+      buf->overflow = true;
+    }
+  }
+
+  SmallJsonBody *buf = static_cast<SmallJsonBody *>(req->_tempObject);
+  if (!buf || buf->overflow)
+    return;
+
+  if (buf->len + len > MAX_SMALL_JSON_BYTES) {
+    buf->overflow = true;
+    return;
+  }
+
+  memcpy(buf->data + buf->len, data, len);
+  buf->len += len;
+  buf->data[buf->len] = '\0';
+}
+
+void abortFsFileUploadIfOwner(AsyncWebServerRequest *req) {
+  if (!fsMutex)
+    return;
+  if (xSemaphoreTake(fsMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+    if (fsUploadSession.active && fsUploadSession.owner == req) {
+      if (fsUploadSession.file)
+        fsUploadSession.file.close();
+      if (spiffsMounted && fsUploadSession.fileOpened && fsUploadSession.path[0] != '\0' &&
+          SPIFFS.exists(fsUploadSession.path)) {
+        SPIFFS.remove(fsUploadSession.path);
+      }
+      fsUploadSession.active = false;
+      fsUploadSession.owner = nullptr;
+      fsUploadSession.fileOpened = false;
+    }
+    xSemaphoreGive(fsMutex);
+  }
+}
+
+void handleFsFileUploadChunk(AsyncWebServerRequest *req, const String &filename,
+                             size_t index, uint8_t *data, size_t len, bool final) {
+  if (!fsMutex)
+    return;
+
+  if (index == 0) {
+    if (!isUploadRequestAuthorized(req))
+      return;
+    if (xSemaphoreTake(fsMutex, pdMS_TO_TICKS(1000)) != pdTRUE)
+      return;
+
+    if (fsUploadSession.active) {
+      xSemaphoreGive(fsMutex);
+      return;
+    }
+
+    fsUploadSession.active = true;
+    fsUploadSession.owner = req;
+    fsUploadSession.bytesWritten = 0;
+    fsUploadSession.fileOpened = false;
+    fsUploadSession.ok = false;
+    fsUploadSession.path[0] = '\0';
+    fsUploadSession.errorMsg[0] = '\0';
+
+    req->onDisconnect([req]() {
+      abortFsFileUploadIfOwner(req);
+    });
+
+    String cleanPath = sanitizeUploadPath(filename);
+    if (!spiffsMounted) {
+      strncpy(fsUploadSession.errorMsg, "SPIFFS not mounted", sizeof(fsUploadSession.errorMsg) - 1);
+    } else if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_UPLOAD) {
+      strncpy(fsUploadSession.errorMsg, "Low memory - retry shortly", sizeof(fsUploadSession.errorMsg) - 1);
+    } else if (cleanPath.isEmpty()) {
+      strncpy(fsUploadSession.errorMsg, "Invalid or too-long filename (max 30 chars)", sizeof(fsUploadSession.errorMsg) - 1);
+    } else {
+      strncpy(fsUploadSession.path, cleanPath.c_str(), sizeof(fsUploadSession.path) - 1);
+      if (SPIFFS.exists(fsUploadSession.path))
+        SPIFFS.remove(fsUploadSession.path);
+      fsUploadSession.file = SPIFFS.open(fsUploadSession.path, "w");
+      if (!fsUploadSession.file) {
+        strncpy(fsUploadSession.errorMsg, "Failed to create file in SPIFFS", sizeof(fsUploadSession.errorMsg) - 1);
+      } else {
+        fsUploadSession.fileOpened = true;
+        fsUploadSession.ok = true;
+      }
+    }
+    xSemaphoreGive(fsMutex);
+  }
+
+  if (len > 0) {
+    if (xSemaphoreTake(fsMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      if (fsUploadSession.active && fsUploadSession.owner == req && fsUploadSession.ok && fsUploadSession.file) {
+        size_t written = fsUploadSession.file.write(data, len);
+        fsUploadSession.bytesWritten += written;
+        if (written != len) {
+          fsUploadSession.ok = false;
+          strncpy(fsUploadSession.errorMsg, "Flash write failed (SPIFFS full)", sizeof(fsUploadSession.errorMsg) - 1);
+        }
+      }
+      xSemaphoreGive(fsMutex);
+    }
+  }
+
+  if (final) {
+    if (xSemaphoreTake(fsMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      if (fsUploadSession.active && fsUploadSession.owner == req) {
+        if (fsUploadSession.file) {
+          fsUploadSession.file.flush();
+          fsUploadSession.file.close();
+        }
+        if (!fsUploadSession.ok && fsUploadSession.fileOpened && fsUploadSession.path[0] != '\0' &&
+            SPIFFS.exists(fsUploadSession.path)) {
+          SPIFFS.remove(fsUploadSession.path);
+        }
+        Serial.printf("[UPLOAD] %s -> %s (%u B)\n",
+                      fsUploadSession.ok ? "OK" : "FAIL",
+                      fsUploadSession.path,
+                      (unsigned)fsUploadSession.bytesWritten);
+      }
+      xSemaphoreGive(fsMutex);
+    }
+  }
+}
+
 void sendWebFile(AsyncWebServerRequest *request, const char *path, const char *contentType) {
   // MEMORY GUARD
   if (ESP.getFreeHeap() < 12000) {
@@ -2419,7 +3237,13 @@ void sendWebFile(AsyncWebServerRequest *request, const char *path, const char *c
     return;
   }
 
-  request->send(404, "text/plain", "File not found");
+  if (strcmp(path, "/index.html") == 0) {
+    Serial.println("[HTTP] /index.html missing -> redirecting to /upload");
+    request->redirect("/upload");
+    return;
+  }
+
+  request->send(404, "text/plain", "File not found (open /upload to add files)");
 }
 
 // WEB SERVER: ALL API ENDPOINTS
@@ -2438,7 +3262,7 @@ void setupWebServer() {
   // CORS AND MEMORY CLOSE HEADERS
   DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
   DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type, X-API-Key, X-Session-Token");
+  DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type, X-API-Key, X-Session-Token, X-Upload-Token");
   DefaultHeaders::Instance().addHeader("Connection", "close"); // FORCES BROWSERS TO RELEASE RAM INSTANTLY
 
   server.on("/ping", HTTP_GET, [](AsyncWebServerRequest *req) { req->send(200, "text/plain", "pong"); });
@@ -2447,6 +3271,312 @@ void setupWebServer() {
   server.on("/config.html", HTTP_GET, [](AsyncWebServerRequest *req) { sendWebFile(req, "/config.html", "text/html"); });
   server.on("/index.svg", HTTP_GET, [](AsyncWebServerRequest *req) { sendWebFile(req, "/index.svg", "image/svg+xml"); });
   server.on("/settings.svg", HTTP_GET, [](AsyncWebServerRequest *req) { sendWebFile(req, "/settings.svg", "image/svg+xml"); });
+
+  // --- Built-in Flash Uploader Page (/upload) ---
+  server.on("/upload", HTTP_GET, [](AsyncWebServerRequest *req) {
+    size_t totalLen = sizeof(UPLOAD_HTML) - 1;
+    AsyncWebServerResponse *res = req->beginChunkedResponse(
+        "text/html",
+        [totalLen](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+          if (index >= totalLen)
+            return 0;
+          size_t toCopy = totalLen - index;
+          if (toCopy > maxLen)
+            toCopy = maxLen;
+          memcpy_P(buffer, UPLOAD_HTML + index, toCopy);
+          return toCopy;
+        });
+    res->addHeader("Cache-Control", "no-store");
+    req->send(res);
+  });
+
+  // --- GET /api/upload-auth/status ---
+  server.on("/api/upload-auth/status", HTTP_GET, [](AsyncWebServerRequest *req) {
+    JsonDocument d;
+    if (uploadAuthMutex && xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+      d["locked"] = uploadAuthLocked;
+      d["failedAttempts"] = uploadAuthFailedAttempts;
+      d["remainingAttempts"] = (uploadAuthFailedAttempts >= UPLOAD_AUTH_MAX_ATTEMPTS)
+                                   ? 0
+                                   : (UPLOAD_AUTH_MAX_ATTEMPTS - uploadAuthFailedAttempts);
+      xSemaphoreGive(uploadAuthMutex);
+    }
+    AsyncResponseStream *res = req->beginResponseStream("application/json");
+    res->addHeader("Cache-Control", "no-store");
+    serializeJson(d, *res);
+    req->send(res);
+  });
+
+  // --- POST /api/upload-auth/login (Max 3 failed attempts -> locked until hardware restart) ---
+  server.on(
+      "/api/upload-auth/login", HTTP_POST,
+      [](AsyncWebServerRequest *req) {
+        SmallJsonBody *buf = static_cast<SmallJsonBody *>(req->_tempObject);
+        String user, pass;
+        if (buf && !buf->overflow && buf->len > 0) {
+          JsonDocument in;
+          if (!deserializeJson(in, buf->data)) {
+            user = String(in["username"] | "");
+            pass = String(in["password"] | "");
+            user.trim();
+          }
+        }
+        if (buf) {
+          delete buf;
+          req->_tempObject = nullptr;
+        }
+
+        bool alreadyLocked = false;
+        if (uploadAuthMutex && xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+          alreadyLocked = uploadAuthLocked;
+          xSemaphoreGive(uploadAuthMutex);
+        }
+        if (alreadyLocked) {
+          req->send(423, "application/json",
+                    "{\"ok\":false,\"locked\":true,\"remainingAttempts\":0,"
+                    "\"error\":\"Locked after 3 failed attempts. Fresh hardware restart required.\"}");
+          return;
+        }
+
+        bool valid = verifyUploadAdminCredentials(user, pass);
+
+        JsonDocument out;
+        int httpCode = 401;
+        if (uploadAuthMutex && xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(300)) == pdTRUE) {
+          if (valid) {
+            uploadAuthFailedAttempts = 0;
+            IPAddress ip = req->client() ? req->client()->remoteIP() : IPAddress(0, 0, 0, 0);
+            generateUploadSessionToken(ip);
+            out["ok"] = true;
+            out["token"] = (const char *)uploadSessionToken;
+            httpCode = 200;
+          } else {
+            if (uploadAuthFailedAttempts < UPLOAD_AUTH_MAX_ATTEMPTS)
+              uploadAuthFailedAttempts++;
+            if (uploadAuthFailedAttempts >= UPLOAD_AUTH_MAX_ATTEMPTS) {
+              uploadAuthLocked = true;
+              invalidateUploadSession();
+            }
+            uint8_t rem = (uploadAuthFailedAttempts >= UPLOAD_AUTH_MAX_ATTEMPTS)
+                              ? 0
+                              : (UPLOAD_AUTH_MAX_ATTEMPTS - uploadAuthFailedAttempts);
+            out["ok"] = false;
+            out["locked"] = uploadAuthLocked;
+            out["remainingAttempts"] = rem;
+            out["error"] = uploadAuthLocked
+                               ? "Maximum attempts reached. Restart required."
+                               : "Invalid admin username or password";
+            httpCode = uploadAuthLocked ? 423 : 401;
+          }
+          xSemaphoreGive(uploadAuthMutex);
+        }
+
+        AsyncResponseStream *res = req->beginResponseStream("application/json");
+        res->setCode(httpCode);
+        res->addHeader("Cache-Control", "no-store");
+        serializeJson(out, *res);
+        req->send(res);
+      },
+      nullptr, handleSmallJsonBody);
+
+  // --- POST /api/upload-auth/logout ---
+  server.on("/api/upload-auth/logout", HTTP_POST, [](AsyncWebServerRequest *req) {
+    if (isUploadRequestAuthorized(req) && uploadAuthMutex &&
+        xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+      invalidateUploadSession();
+      xSemaphoreGive(uploadAuthMutex);
+    }
+    req->send(200, "application/json", "{\"ok\":true}");
+  });
+
+  // --- POST /api/upload-auth/forget/start (5s press window + 10s hold) ---
+  server.on("/api/upload-auth/forget/start", HTTP_POST, [](AsyncWebServerRequest *req) {
+    if (!uploadAuthMutex || xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+      req->send(503, "application/json", "{\"ok\":false,\"error\":\"Busy\"}");
+      return;
+    }
+    ufState = UF_WAIT_PRESS;
+    ufWindowDeadlineMs = millis() + UPLOAD_FORGET_PRESS_WINDOW_MS;
+    ufHoldStartMs = 0;
+    ufReleaseSinceMs = 0;
+    ufStatusMsg[0] = '\0';
+    xSemaphoreGive(uploadAuthMutex);
+    req->send(200, "application/json", "{\"ok\":true,\"pressWindowMs\":5000,\"holdMs\":10000}");
+  });
+
+  // --- GET /api/upload-auth/forget/status ---
+  server.on("/api/upload-auth/forget/status", HTTP_GET, [](AsyncWebServerRequest *req) {
+    JsonDocument d;
+    unsigned long now = millis();
+    if (uploadAuthMutex && xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+      switch (ufState) {
+      case UF_WAIT_PRESS:
+        d["state"] = "wait_press";
+        d["remainingMs"] = ((int32_t)(ufWindowDeadlineMs - now) > 0) ? (uint32_t)(ufWindowDeadlineMs - now) : 0;
+        break;
+      case UF_HOLDING:
+        d["state"] = "holding";
+        d["heldMs"] = (uint32_t)(now - ufHoldStartMs);
+        break;
+      case UF_DONE:
+        d["state"] = "done";
+        d["message"] = (const char *)ufStatusMsg;
+        break;
+      case UF_TIMEOUT:
+        d["state"] = "timeout";
+        d["message"] = (const char *)ufStatusMsg;
+        break;
+      case UF_RELEASED_EARLY:
+        d["state"] = "released_early";
+        d["message"] = (const char *)ufStatusMsg;
+        break;
+      default:
+        d["state"] = "idle";
+        break;
+      }
+      xSemaphoreGive(uploadAuthMutex);
+    }
+    AsyncResponseStream *res = req->beginResponseStream("application/json");
+    res->addHeader("Cache-Control", "no-store");
+    serializeJson(d, *res);
+    req->send(res);
+  });
+
+  // --- POST /api/fs/reboot (Authenticated reboot from /upload) ---
+  server.on("/api/fs/reboot", HTTP_POST, [](AsyncWebServerRequest *req) {
+    if (!isUploadRequestAuthorized(req)) {
+      req->send(401, "application/json", "{\"ok\":false,\"error\":\"Unauthorized\"}");
+      return;
+    }
+    req->send(200, "application/json", "{\"ok\":true,\"msg\":\"Restarting...\"}");
+    restartFlag = true;
+    restartAt = millis() + 600;
+  });
+
+  // --- GET /api/fs/list (Lists SPIFFS storage & files for /upload) ---
+  server.on("/api/fs/list", HTTP_GET, [](AsyncWebServerRequest *req) {
+    if (!isUploadRequestAuthorized(req)) {
+      req->send(401, "application/json", "{\"ok\":false,\"error\":\"Unauthorized\"}");
+      return;
+    }
+    JsonDocument doc;
+    uint64_t totalB = spiffsMounted ? (uint64_t)SPIFFS.totalBytes() : 0;
+    uint64_t usedB = spiffsMounted ? (uint64_t)SPIFFS.usedBytes() : 0;
+    doc["board"] = "ESP32-Dev";
+    doc["fsType"] = spiffsMounted ? "SPIFFS" : "UNMOUNTED";
+    doc["usedBytes"] = usedB;
+    doc["totalBytes"] = totalB;
+    doc["freeBytes"] = (totalB > usedB) ? (totalB - usedB) : 0;
+    doc["freeHeap"] = ESP.getFreeHeap();
+
+    JsonArray arr = doc["files"].to<JsonArray>();
+    if (spiffsMounted && fsMutex && xSemaphoreTake(fsMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      File root = SPIFFS.open("/");
+      if (root) {
+        for (File f = root.openNextFile(); f; f = root.openNextFile()) {
+          if (f.isDirectory())
+            continue;
+          String name = String(f.name());
+          if (!name.startsWith("/"))
+            name = String("/") + name;
+          JsonObject item = arr.add<JsonObject>();
+          item["name"] = name;
+          item["size"] = (uint32_t)f.size();
+        }
+        root.close();
+      }
+      xSemaphoreGive(fsMutex);
+    }
+
+    AsyncResponseStream *res = req->beginResponseStream("application/json");
+    res->addHeader("Cache-Control", "no-store");
+    serializeJson(doc, *res);
+    req->send(res);
+  });
+
+  // --- POST /api/fs/upload (Streams uploaded files straight into SPIFFS) ---
+  server.on(
+      "/api/fs/upload", HTTP_POST,
+      [](AsyncWebServerRequest *req) {
+        if (!isUploadRequestAuthorized(req)) {
+          req->send(401, "application/json", "{\"ok\":false,\"error\":\"Unauthorized\"}");
+          return;
+        }
+        bool ok = false;
+        size_t bytes = 0;
+        String path;
+        String err;
+
+        if (fsMutex && xSemaphoreTake(fsMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+          if (fsUploadSession.active && fsUploadSession.owner == req) {
+            if (fsUploadSession.file) {
+              fsUploadSession.file.flush();
+              fsUploadSession.file.close();
+            }
+            ok = fsUploadSession.ok;
+            bytes = fsUploadSession.bytesWritten;
+            path = fsUploadSession.path;
+            err = fsUploadSession.errorMsg;
+            fsUploadSession.active = false;
+            fsUploadSession.owner = nullptr;
+            fsUploadSession.fileOpened = false;
+          } else {
+            err = "No file received or uploader busy";
+          }
+          xSemaphoreGive(fsMutex);
+        } else {
+          err = "Storage busy";
+        }
+
+        JsonDocument out;
+        out["ok"] = ok;
+        if (ok) {
+          out["path"] = path;
+          out["bytes"] = (uint32_t)bytes;
+          notifyStorage();
+        } else {
+          out["error"] = err.isEmpty() ? "Upload failed" : err;
+        }
+
+        AsyncResponseStream *res = req->beginResponseStream("application/json");
+        res->setCode(ok ? 200 : 500);
+        res->addHeader("Cache-Control", "no-store");
+        serializeJson(out, *res);
+        req->send(res);
+      },
+      handleFsFileUploadChunk);
+
+  // --- POST /api/fs/delete?path=/filename ---
+  server.on("/api/fs/delete", HTTP_POST, [](AsyncWebServerRequest *req) {
+    if (!isUploadRequestAuthorized(req)) {
+      req->send(401, "application/json", "{\"ok\":false,\"error\":\"Unauthorized\"}");
+      return;
+    }
+    if (!spiffsMounted || !req->hasParam("path")) {
+      req->send(400, "application/json", "{\"ok\":false,\"error\":\"Missing path\"}");
+      return;
+    }
+    String p = sanitizeUploadPath(req->getParam("path")->value());
+    if (p.isEmpty()) {
+      req->send(400, "application/json", "{\"ok\":false,\"error\":\"Invalid path\"}");
+      return;
+    }
+
+    bool removed = false;
+    if (fsMutex && xSemaphoreTake(fsMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      if (SPIFFS.exists(p.c_str())) {
+        removed = SPIFFS.remove(p.c_str());
+      }
+      xSemaphoreGive(fsMutex);
+    }
+
+    if (removed) {
+      notifyStorage();
+      req->send(200, "application/json", "{\"ok\":true}");
+    } else {
+      req->send(404, "application/json", "{\"ok\":false,\"error\":\"File not found\"}");
+    }
+  });
 
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *req) {
     JsonDocument d;
@@ -4023,6 +5153,10 @@ void setupWebServer() {
     });
 
     server.on("/api/admin/restart", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (uploadAuthLocked) {
+        req->send(423, "application/json", "{\"ok\":false,\"error\":\"Locked - physical restart required\"}");
+        return;
+      }
       if (!req->hasParam("adminUser", true) || !req->hasParam("adminPass", true)) {
         req->send(400, "application/json", "{\"error\":\"Admin credentials required\"}");
         return;
@@ -4716,6 +5850,8 @@ void setupWebServer() {
 void setup() {
   std::set_new_handler(oomNewHandler);
   swStateMutex = xSemaphoreCreateMutex();
+  fsMutex = xSemaphoreCreateMutex();
+  uploadAuthMutex = xSemaphoreCreateMutex();
 
   // 1. Restore relays FIRST so pins never drop out during boot delays
   loadSwitchSettings();
@@ -4752,10 +5888,13 @@ void setup() {
     runWifiConfigPortal(true);
   }
 
-  if (!SPIFFS.begin(true))
+  spiffsMounted = SPIFFS.begin(true, "/spiffs", 10);
+  if (!spiffsMounted)
     Serial.println("[ERROR] SPIFFS Mount Failed!");
   else
-    Serial.println("[OK] SPIFFS Mounted Successfully");
+    Serial.printf("[OK] SPIFFS Mounted (%u / %u KB used)\n",
+                  (unsigned)(SPIFFS.usedBytes() / 1024),
+                  (unsigned)(SPIFFS.totalBytes() / 1024));
 
   loadWifiSettings();
   loadAdminSettings();
@@ -4800,7 +5939,9 @@ void setup() {
   Serial.println("==============================");
   Serial.println("System Ready");
   if (WiFi.status() == WL_CONNECTED)
-    Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("IP: %s  (Uploader: http://%s/upload)\n",
+                  WiFi.localIP().toString().c_str(),
+                  WiFi.localIP().toString().c_str());
   Serial.println("==============================\n");
 }
 
@@ -4866,7 +6007,10 @@ void loop() {
   }
 
   serviceNotifyStorage();
-  updateBootButtonHoldState();
+  serviceUploadForgetButton();
+  if (ufState != UF_WAIT_PRESS && ufState != UF_HOLDING) {
+    updateBootButtonHoldState();
+  }
   checkPhysicalSwitches();
   clearPendingAutomationActions();
   checkTimers();
