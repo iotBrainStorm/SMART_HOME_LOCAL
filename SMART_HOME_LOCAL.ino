@@ -136,6 +136,19 @@ unsigned long ufWindowDeadlineMs = 0;
 unsigned long ufHoldStartMs = 0;
 unsigned long ufReleaseSinceMs = 0;
 char ufStatusMsg[96] = "";
+enum AdminResetBootState : uint8_t {
+  ARB_IDLE = 0,
+  ARB_WAIT_PRESS,
+  ARB_HOLDING,
+  ARB_READY,
+  ARB_TIMEOUT,
+  ARB_RELEASED_EARLY
+};
+AdminResetBootState arbState = ARB_IDLE;
+unsigned long arbWindowDeadlineMs = 0;
+unsigned long arbHoldStartMs = 0;
+unsigned long arbReleaseSinceMs = 0;
+char arbStatusMsg[96] = "";
 
 struct FsFileUploadSession {
   bool active = false;
@@ -1766,12 +1779,14 @@ bool consumeBootButtonHoldForReset() {
   if (now - bootHoldSatisfiedAt > BOOT_HOLD_READY_WINDOW_MS) {
     bootHoldSatisfied = false;
     bootHoldSatisfiedAt = 0;
+    arbState = ARB_IDLE;
     return false;
   }
 
   bootHoldSatisfied = false;
   bootHoldSatisfiedAt = 0;
   bootButtonPressedAt = now;
+  arbState = ARB_IDLE;
   return true;
 }
 
@@ -3092,6 +3107,61 @@ void serviceUploadForgetButton() {
       notifyStorage();
     }
   }
+}
+
+void serviceAdminResetBootButton() {
+  if (arbState != ARB_WAIT_PRESS && arbState != ARB_HOLDING)
+    return;
+
+  if (uploadAuthMutex && xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(10)) != pdTRUE)
+    return;
+
+  unsigned long now = millis();
+  bool pressed = (digitalRead(BOOT_BUTTON) == LOW);
+
+  if (arbState == ARB_WAIT_PRESS) {
+    if (pressed) {
+      arbState = ARB_HOLDING;
+      arbHoldStartMs = now;
+      arbReleaseSinceMs = 0;
+      digitalWrite(LED_PIN, HIGH);
+      digitalWrite(BUILTIN_LED_PIN, HIGH);
+      Serial.println("[RESET] BOOT pressed in 5s window -> hold 5s to confirm");
+    } else if ((int32_t)(now - arbWindowDeadlineMs) >= 0) {
+      arbState = ARB_TIMEOUT;
+      strncpy(arbStatusMsg, "Timed out: BOOT button was not pressed within 5s.", sizeof(arbStatusMsg) - 1);
+      arbStatusMsg[sizeof(arbStatusMsg) - 1] = '\0';
+      digitalWrite(LED_PIN, LOW);
+      digitalWrite(BUILTIN_LED_PIN, LOW);
+    }
+  } else if (arbState == ARB_HOLDING) {
+    if (!pressed) {
+      if (arbReleaseSinceMs == 0)
+        arbReleaseSinceMs = now;
+      if (now - arbReleaseSinceMs >= UPLOAD_FORGET_DEBOUNCE_MS) {
+        arbState = ARB_RELEASED_EARLY;
+        strncpy(arbStatusMsg, "Cancelled: BOOT button was released before 5s.", sizeof(arbStatusMsg) - 1);
+        arbStatusMsg[sizeof(arbStatusMsg) - 1] = '\0';
+        digitalWrite(LED_PIN, LOW);
+        digitalWrite(BUILTIN_LED_PIN, LOW);
+      }
+    } else {
+      arbReleaseSinceMs = 0;
+      if (now - arbHoldStartMs >= BOOT_HOLD_RESET_MS) {
+        digitalWrite(LED_PIN, LOW);
+        digitalWrite(BUILTIN_LED_PIN, LOW);
+        bootHoldSatisfied = true;
+        bootHoldSatisfiedAt = now;
+        arbState = ARB_READY;
+        strncpy(arbStatusMsg, "BOOT hold verified!", sizeof(arbStatusMsg) - 1);
+        arbStatusMsg[sizeof(arbStatusMsg) - 1] = '\0';
+        Serial.println("[RESET] 5s BOOT hold verified");
+      }
+    }
+  }
+
+  if (uploadAuthMutex)
+    xSemaphoreGive(uploadAuthMutex);
 }
 
 void handleSmallJsonBody(AsyncWebServerRequest *req, uint8_t *data, size_t len,
@@ -5704,6 +5774,76 @@ void setupWebServer() {
       req->send(response);
     });
 
+    // --- Live 5s Press + 5s Hold BOOT Verification for Settings Resets ---
+    server.on("/api/admin/reset/boot/start", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (!requireAdminVerification(req))
+        return;
+      if (!uploadAuthMutex || xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        req->send(503, "application/json", "{\"ok\":false,\"error\":\"Busy\"}");
+        return;
+      }
+      bootHoldSatisfied = false;
+      bootHoldSatisfiedAt = 0;
+      arbState = ARB_WAIT_PRESS;
+      arbWindowDeadlineMs = millis() + UPLOAD_FORGET_PRESS_WINDOW_MS;
+      arbHoldStartMs = 0;
+      arbReleaseSinceMs = 0;
+      arbStatusMsg[0] = '\0';
+      xSemaphoreGive(uploadAuthMutex);
+      req->send(200, "application/json", "{\"ok\":true,\"pressWindowMs\":5000,\"holdMs\":5000}");
+    });
+
+    server.on("/api/admin/reset/boot/status", HTTP_GET, [](AsyncWebServerRequest *req) {
+      JsonDocument d;
+      unsigned long now = millis();
+      if (uploadAuthMutex && xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+        switch (arbState) {
+        case ARB_WAIT_PRESS:
+          d["state"] = "wait_press";
+          d["remainingMs"] = ((int32_t)(arbWindowDeadlineMs - now) > 0) ? (uint32_t)(arbWindowDeadlineMs - now) : 0;
+          break;
+        case ARB_HOLDING:
+          d["state"] = "holding";
+          d["heldMs"] = (uint32_t)(now - arbHoldStartMs);
+          break;
+        case ARB_READY:
+          d["state"] = "ready";
+          d["message"] = (const char *)arbStatusMsg;
+          break;
+        case ARB_TIMEOUT:
+          d["state"] = "timeout";
+          d["message"] = (const char *)arbStatusMsg;
+          break;
+        case ARB_RELEASED_EARLY:
+          d["state"] = "released_early";
+          d["message"] = (const char *)arbStatusMsg;
+          break;
+        default:
+          d["state"] = "idle";
+          break;
+        }
+        xSemaphoreGive(uploadAuthMutex);
+      }
+      AsyncResponseStream *res = req->beginResponseStream("application/json");
+      res->addHeader("Cache-Control", "no-store");
+      serializeJson(d, *res);
+      req->send(res);
+    });
+
+    server.on("/api/admin/reset/boot/cancel", HTTP_POST, [](AsyncWebServerRequest *req) {
+      if (uploadAuthMutex && xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+        arbState = ARB_IDLE;
+        arbWindowDeadlineMs = 0;
+        arbHoldStartMs = 0;
+        arbReleaseSinceMs = 0;
+        arbStatusMsg[0] = '\0';
+        xSemaphoreGive(uploadAuthMutex);
+      }
+      digitalWrite(LED_PIN, LOW);
+      digitalWrite(BUILTIN_LED_PIN, LOW);
+      req->send(200, "application/json", "{\"ok\":true}");
+    });
+
     server.on("/api/admin/reset/storage", HTTP_POST, [](AsyncWebServerRequest *req) {
       if (!requireAdminVerification(req))
         return;
@@ -6039,7 +6179,9 @@ void loop() {
 
   serviceNotifyStorage();
   serviceUploadForgetButton();
-  if (ufState != UF_WAIT_PRESS && ufState != UF_HOLDING) {
+  serviceAdminResetBootButton();
+  if (ufState != UF_WAIT_PRESS && ufState != UF_HOLDING &&
+      arbState != ARB_WAIT_PRESS && arbState != ARB_HOLDING) {
     updateBootButtonHoldState();
   }
   checkPhysicalSwitches();

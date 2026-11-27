@@ -704,6 +704,21 @@
         color: #94a3b8;
       }
 
+      .reset-boot-bar {
+        height: 7px;
+        margin-top: 8px;
+        background: rgba(255, 255, 255, 0.08);
+        border-radius: 99px;
+        overflow: hidden;
+      }
+
+      .reset-boot-bar > div {
+        height: 100%;
+        width: 0%;
+        background: #d29922;
+        transition: width 0.18s linear;
+      }
+
       .reset-checklist {
         list-style: none;
         margin: 10px 0 0;
@@ -4896,6 +4911,15 @@
         var target = document.getElementById(panelId);
         if (target) target.classList.add("active");
 
+        if (
+          typeof cancelActiveResetBootFlow === "function" &&
+          panelId !== "panel-admin-storage" &&
+          panelId !== "panel-admin-settings" &&
+          panelId !== "panel-admin-factory"
+        ) {
+          cancelActiveResetBootFlow();
+        }
+
         if (panelId === "panel-auto-timer") {
           startTimerRealtimeFeed();
         } else {
@@ -8141,8 +8165,9 @@
       /* ══════════════════════════════════════════════════════════════
          ADMINISTRATOR ACTIONS
       ══════════════════════════════════════════════════════════════ */
-      var resetBootHoldCountdownTimer = null;
-      var resetBootHoldRequestTimer = null;
+      var resetBootPollTimer = null;
+      var resetBootPollInFlight = false;
+      var activeResetBootAction = null;
       var RESET_CHECKPOINT_GAP_MS = 700;
       var RESET_ALL_DONE_GAP_MS = 2000;
       var RESET_ACTION_CONFIG = {
@@ -8180,15 +8205,59 @@
         return document.getElementById(config.runtimeId);
       }
 
+      function setResetActionButtonDisabled(actionType, disabled) {
+        var container = getResetRuntimeContainer(actionType);
+        if (!container || !container.parentElement) return;
+        var btn = container.parentElement.querySelector(
+          "button.cfg-btn-danger",
+        );
+        if (btn) btn.disabled = !!disabled;
+      }
+
       function clearResetBootHoldTimers() {
-        if (resetBootHoldCountdownTimer) {
-          clearInterval(resetBootHoldCountdownTimer);
-          resetBootHoldCountdownTimer = null;
+        if (resetBootPollTimer) {
+          clearInterval(resetBootPollTimer);
+          resetBootPollTimer = null;
         }
-        if (resetBootHoldRequestTimer) {
-          clearTimeout(resetBootHoldRequestTimer);
-          resetBootHoldRequestTimer = null;
-        }
+        resetBootPollInFlight = false;
+      }
+
+      function cancelActiveResetBootFlow() {
+        if (!activeResetBootAction) return;
+        var prevAction = activeResetBootAction;
+        activeResetBootAction = null;
+        clearResetBootHoldTimers();
+        setResetActionButtonDisabled(prevAction, false);
+        fetch("/api/admin/reset/boot/cancel", { method: "POST" }).catch(
+          function () {},
+        );
+      }
+
+      function createResetBootProgressUi(actionType, initialText) {
+        var container = getResetRuntimeContainer(actionType);
+        var config = RESET_ACTION_CONFIG[actionType];
+        if (!container || !config) return null;
+
+        container.classList.add("active");
+        container.innerHTML = "";
+
+        var title = document.createElement("div");
+        title.className = "reset-runtime-title";
+        title.textContent = config.title + " Progress";
+        container.appendChild(title);
+
+        var msg = document.createElement("div");
+        msg.className = "reset-runtime-msg";
+        msg.textContent = initialText || "";
+        container.appendChild(msg);
+
+        var barWrap = document.createElement("div");
+        barWrap.className = "reset-boot-bar";
+        var barFill = document.createElement("div");
+        barWrap.appendChild(barFill);
+        container.appendChild(barWrap);
+
+        return { msgEl: msg, barEl: barFill };
       }
 
       function showResetRuntimeMessage(actionType, message, type) {
@@ -8318,124 +8387,198 @@
         markNext();
       }
 
-      function executeResetAction(actionType, adminUser, adminPass) {
+      function submitVerifiedResetRequest(actionType, adminUser, adminPass) {
         var config = RESET_ACTION_CONFIG[actionType];
-        if (!config) {
-          return;
-        }
+        if (!config) return;
 
-        clearResetBootHoldTimers();
-
-        var holdSeconds = 5;
-        showResetRuntimeMessage(
-          actionType,
-          "Admin verified. Press and hold BOOT now for " +
-            holdSeconds +
-            " seconds...",
-          "info",
-        );
-
-        resetBootHoldCountdownTimer = window.setInterval(function () {
-          holdSeconds -= 1;
-          if (holdSeconds > 0) {
-            showResetRuntimeMessage(
-              actionType,
-              "Admin verified. Press and hold BOOT now for " +
-                holdSeconds +
-                " seconds...",
-              "info",
-            );
-          }
-        }, 1000);
-
-        resetBootHoldRequestTimer = window.setTimeout(function () {
-          clearResetBootHoldTimers();
-          showResetRuntimeMessage(
-            actionType,
-            "Verifying BOOT hold and starting clear sequence...",
-            "info",
-          );
-
-          apiPost(
-            config.endpoint,
-            "adminUser=" +
-              encodeURIComponent(adminUser) +
-              "&adminPass=" +
-              encodeURIComponent(adminPass) +
-              "&scope=" +
-              encodeURIComponent(actionType),
-          )
-            .then(function (d) {
-              if (!d || !d.ok) {
-                showResetRuntimeMessage(
-                  actionType,
-                  (d && d.error) ||
-                    "Reset failed. Hold BOOT for 5 seconds and try again.",
-                  "error",
-                );
-                return;
-              }
-
-              if (
-                d &&
-                d.type &&
-                String(d.type || "")
-                  .trim()
-                  .toLowerCase() !== actionType
-              ) {
-                showResetRuntimeMessage(
-                  actionType,
-                  "Unexpected reset response type received. Please refresh and try again.",
-                  "error",
-                );
-                return;
-              }
-
-              var stepGapMs = RESET_CHECKPOINT_GAP_MS;
-              var finalGapMs = RESET_ALL_DONE_GAP_MS;
-              if (d && isFinite(parseInt(d.stepGapMs, 10))) {
-                stepGapMs = parseInt(d.stepGapMs, 10);
-              }
-              if (d && isFinite(parseInt(d.finalGapMs, 10))) {
-                finalGapMs = parseInt(d.finalGapMs, 10);
-              }
-              if (actionType === "factory") {
-                finalGapMs = 2000;
-              }
-              var view = renderResetChecklist(actionType, d.steps, stepGapMs);
-              var restartSeconds = parseInt(d.restartIn, 10) || 45;
-
-              var onChecklistComplete = function () {
-                if (view && view.messageEl) {
-                  view.messageEl.textContent = "Cleared!";
-                  view.messageEl.style.color = "#86efac";
-                }
-
-                window.setTimeout(function () {
-                  if (actionType === "factory") {
-                    showWifiScanModal();
-                    return;
-                  }
-
-                  if (view && view.messageEl) {
-                    view.messageEl.textContent = d.msg || "Restarting ESP32...";
-                  }
-                  startRestartProgress(restartSeconds);
-                }, finalGapMs);
-              };
-
-              window.setTimeout(function () {
-                animateResetChecklist(view, onChecklistComplete);
-              }, 50);
-            })
-            .catch(function () {
+        apiPost(
+          config.endpoint,
+          "adminUser=" +
+            encodeURIComponent(adminUser) +
+            "&adminPass=" +
+            encodeURIComponent(adminPass) +
+            "&scope=" +
+            encodeURIComponent(actionType),
+        )
+          .then(function (d) {
+            if (!d || !d.ok) {
+              setResetActionButtonDisabled(actionType, false);
               showResetRuntimeMessage(
                 actionType,
-                "Connection error. If the device restarted, reconnect and check reset state.",
+                (d && d.error) ||
+                  "Reset failed. Hold BOOT for 5 seconds and try again.",
                 "error",
               );
-            });
-        }, 5200);
+              return;
+            }
+
+            if (
+              d &&
+              d.type &&
+              String(d.type || "")
+                .trim()
+                .toLowerCase() !== actionType
+            ) {
+              setResetActionButtonDisabled(actionType, false);
+              showResetRuntimeMessage(
+                actionType,
+                "Unexpected reset response type received. Please refresh and try again.",
+                "error",
+              );
+              return;
+            }
+
+            var stepGapMs = RESET_CHECKPOINT_GAP_MS;
+            var finalGapMs = RESET_ALL_DONE_GAP_MS;
+            if (d && isFinite(parseInt(d.stepGapMs, 10))) {
+              stepGapMs = parseInt(d.stepGapMs, 10);
+            }
+            if (d && isFinite(parseInt(d.finalGapMs, 10))) {
+              finalGapMs = parseInt(d.finalGapMs, 10);
+            }
+            if (actionType === "factory") {
+              finalGapMs = 2000;
+            }
+
+            var view = renderResetChecklist(actionType, d.steps, stepGapMs);
+            var restartSeconds = parseInt(d.restartIn, 10) || 45;
+
+            var onChecklistComplete = function () {
+              if (view && view.messageEl) {
+                view.messageEl.textContent = "Cleared!";
+                view.messageEl.style.color = "#86efac";
+              }
+
+              window.setTimeout(function () {
+                if (actionType === "factory") {
+                  showWifiScanModal();
+                  return;
+                }
+
+                if (view && view.messageEl) {
+                  view.messageEl.textContent = d.msg || "Restarting ESP32...";
+                }
+                startRestartProgress(restartSeconds);
+              }, finalGapMs);
+            };
+
+            window.setTimeout(function () {
+              animateResetChecklist(view, onChecklistComplete);
+            }, 50);
+          })
+          .catch(function () {
+            setResetActionButtonDisabled(actionType, false);
+            showResetRuntimeMessage(
+              actionType,
+              "Connection error. If the device restarted, reconnect and check reset state.",
+              "error",
+            );
+          });
+      }
+
+      function executeResetAction(actionType, adminUser, adminPass) {
+        var config = RESET_ACTION_CONFIG[actionType];
+        if (!config) return;
+
+        cancelActiveResetBootFlow();
+        activeResetBootAction = actionType;
+        setResetActionButtonDisabled(actionType, true);
+
+        var ui = createResetBootProgressUi(
+          actionType,
+          "Arming hardware reset...",
+        );
+        if (!ui) return;
+
+        apiPost(
+          "/api/admin/reset/boot/start",
+          "adminUser=" +
+            encodeURIComponent(adminUser) +
+            "&adminPass=" +
+            encodeURIComponent(adminPass),
+        )
+          .then(function (res) {
+            if (!res || !res.ok) {
+              activeResetBootAction = null;
+              setResetActionButtonDisabled(actionType, false);
+              ui.barEl.style.background = "#f85149";
+              ui.msgEl.style.color = "#fda4af";
+              ui.msgEl.textContent =
+                (res && res.error) || "Could not start hardware verification.";
+              return;
+            }
+
+            var pollBootStatus = function () {
+              if (
+                resetBootPollInFlight ||
+                activeResetBootAction !== actionType
+              ) {
+                return;
+              }
+              resetBootPollInFlight = true;
+
+              apiGet("/api/admin/reset/boot/status")
+                .then(function (d) {
+                  resetBootPollInFlight = false;
+                  if (activeResetBootAction !== actionType) return;
+
+                  if (d.state === "wait_press") {
+                    var rem = (d.remainingMs / 1000).toFixed(1);
+                    ui.barEl.style.background = "#d29922";
+                    ui.barEl.style.width =
+                      Math.min(100, ((5000 - d.remainingMs) / 5000) * 100) +
+                      "%";
+                    ui.msgEl.style.color = "#f2cc60";
+                    ui.msgEl.textContent =
+                      "Hold onboard BOOT button within " + rem + "s";
+                  } else if (d.state === "holding") {
+                    var held = (d.heldMs / 1000).toFixed(1);
+                    ui.barEl.style.background = "#2f81f7";
+                    ui.barEl.style.width =
+                      Math.min(100, (d.heldMs / 5000) * 100) + "%";
+                    ui.msgEl.style.color = "#93c5fd";
+                    ui.msgEl.textContent =
+                      "Keep holding BOOT button " + held + "s / 5s";
+                  } else {
+                    clearResetBootHoldTimers();
+                    activeResetBootAction = null;
+
+                    if (d.state === "ready") {
+                      ui.barEl.style.background = "#3fb950";
+                      ui.barEl.style.width = "100%";
+                      ui.msgEl.style.color = "#86efac";
+                      ui.msgEl.textContent =
+                        "BOOT verified! Starting clear sequence...";
+                      submitVerifiedResetRequest(
+                        actionType,
+                        adminUser,
+                        adminPass,
+                      );
+                    } else {
+                      setResetActionButtonDisabled(actionType, false);
+                      ui.barEl.style.background = "#f85149";
+                      if (d.state === "timeout") ui.barEl.style.width = "100%";
+                      ui.msgEl.style.color = "#fda4af";
+                      ui.msgEl.textContent =
+                        d.message || "Hardware verification failed. Try again.";
+                    }
+                  }
+                })
+                .catch(function () {
+                  resetBootPollInFlight = false;
+                });
+            };
+
+            resetBootPollTimer = window.setInterval(pollBootStatus, 200);
+            pollBootStatus();
+          })
+          .catch(function () {
+            activeResetBootAction = null;
+            setResetActionButtonDisabled(actionType, false);
+            ui.barEl.style.background = "#f85149";
+            ui.msgEl.style.color = "#fda4af";
+            ui.msgEl.textContent = "Connection error while starting reset.";
+          });
       }
 
       function confirmAdminAction(actionType) {
