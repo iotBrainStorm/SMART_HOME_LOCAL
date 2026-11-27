@@ -622,6 +622,7 @@ String timeFormat = "24h"; // "12h" or "24h"
 long gmtOff = 0;
 float geoLat = DEFAULT_LATITUDE, geoLon = DEFAULT_LONGITUDE;
 String deviceName = "";
+bool mdnsEnabled = true;
 String mdnsName = "";
 volatile bool timeSynced = false;
 String lastSyncTimeStr = "";
@@ -1266,6 +1267,7 @@ void loadAdminSettings() {
   geoLat = prefs.getFloat("lat", DEFAULT_LATITUDE);
   geoLon = prefs.getFloat("lon", DEFAULT_LONGITUDE);
   storedDeviceName = prefs.getString("devname", "");
+  mdnsEnabled = prefs.getBool("mdnsEn", true);
   String storedMdns = prefs.getString("mdns", "");
   storedPrimaryAdminId = prefs.getString("puid", String(PRIMARY_ADMIN_ID));
   storedPrimaryAdminPass = prefs.getString("ppass", String(PRIMARY_ADMIN_PASS));
@@ -1318,7 +1320,8 @@ void loadAdminSettings() {
   bool migrateLegacyReversedDeviceName = false;
   storedMdns.trim();
   if (storedMdns.isEmpty()) {
-    mdnsName = getDefaultMdnsName();
+    prefs.putBool("mdnsEn", mdnsEnabled);
+    prefs.putString("mdns", mdnsName);
   } else {
     mdnsName = storedMdns;
   }
@@ -1685,14 +1688,19 @@ void resetDeviceNameToDefault() {
 }
 
 void resetMdnsNameToDefault() {
+  mdnsEnabled = true;
   mdnsName = getDefaultMdnsName();
   prefs.begin("admin", false);
+  prefs.putBool("mdnsEn", mdnsEnabled);
   prefs.putString("mdns", mdnsName);
   prefs.end();
 
   MDNS.end();
-  MDNS.begin(mdnsName.c_str());
-  MDNS.addService("http", "tcp", 80);
+  if (mdnsEnabled && WiFi.status() == WL_CONNECTED) {
+    if (MDNS.begin(mdnsName.c_str())) {
+      MDNS.addService("http", "tcp", 80);
+    }
+  }
 }
 
 void resetNtpServerToDefault() {
@@ -4755,6 +4763,7 @@ void setupWebServer() {
 
     server.on("/api/admin/mdns", HTTP_GET, [](AsyncWebServerRequest *req) {
       JsonDocument d;
+      d["enabled"] = mdnsEnabled;
       d["mdns"] = mdnsName;
       d["defaultMdns"] = getDefaultMdnsName();
       d["macMdns"] = getMacMdnsName();
@@ -4764,37 +4773,59 @@ void setupWebServer() {
     });
 
     server.on("/api/admin/mdns", HTTP_POST, [](AsyncWebServerRequest *req) {
-      if (!req->hasParam("mdns", true)) {
-        req->send(400, "application/json", "{\"error\":\"Missing mDNS name\"}");
-        return;
-      }
       if (!requireAdminVerification(req))
         return;
 
-      String newMdns = req->getParam("mdns", true)->value();
-      newMdns.trim();
-      if (newMdns.isEmpty()) {
-        req->send(400, "application/json", "{\"error\":\"mDNS name is required\"}");
-        return;
+      bool newEnabled = mdnsEnabled;
+      if (req->hasParam("enabled", true)) {
+        newEnabled = (req->getParam("enabled", true)->value() == "true");
       }
-      if (newMdns.length() > 32) {
+
+      String newMdns = mdnsName;
+      if (req->hasParam("mdns", true)) {
+        newMdns = req->getParam("mdns", true)->value();
+        newMdns.trim();
+      }
+
+      if (newEnabled) {
+        if (newMdns.isEmpty()) {
+          req->send(400, "application/json", "{\"error\":\"mDNS name is required\"}");
+          return;
+        }
+        if (newMdns.length() > 32) {
+          req->send(400, "application/json", "{\"error\":\"mDNS name too long\"}");
+          return;
+        }
+      } else if (newMdns.isEmpty()) {
+        newMdns = mdnsName.isEmpty() ? getDefaultMdnsName() : mdnsName;
+      } else if (newMdns.length() > 32) {
         req->send(400, "application/json", "{\"error\":\"mDNS name too long\"}");
         return;
       }
 
+      mdnsEnabled = newEnabled;
       mdnsName = newMdns;
+
       prefs.begin("admin", false);
+      prefs.putBool("mdnsEn", mdnsEnabled);
       prefs.putString("mdns", mdnsName);
       prefs.end();
       notifyStorage();
 
-      // Restart mDNS service locally
+      // Apply mDNS state immediately
       MDNS.end();
-      MDNS.begin(mdnsName.c_str());
-      MDNS.addService("http", "tcp", 80);
+      if (mdnsEnabled && WiFi.status() == WL_CONNECTED) {
+        if (MDNS.begin(mdnsName.c_str())) {
+          MDNS.addService("http", "tcp", 80);
+          Serial.println("[MDNS] Started: http://" + mdnsName + ".local");
+        }
+      } else {
+        Serial.println("[MDNS] Stopped (disabled by settings)");
+      }
 
       JsonDocument d;
       d["ok"] = true;
+      d["enabled"] = mdnsEnabled;
       d["mdns"] = mdnsName;
       AsyncResponseStream *response = req->beginResponseStream("application/json");
       serializeJson(d, *response);
@@ -5296,6 +5327,7 @@ void setupWebServer() {
       // 2. Admin & API Key
       JsonObject adm = doc["admin"].to<JsonObject>();
       adm["deviceName"] = deviceName;
+      adm["mdnsEnabled"] = mdnsEnabled;
       adm["mdns"] = mdnsName;
       adm["ntp"] = ntpSrv;
       adm["tz"] = tzStr;
@@ -5477,6 +5509,9 @@ void setupWebServer() {
               dn.trim();
               if (!dn.isEmpty() && dn.length() <= 32)
                 localPrefs.putString("devname", dn);
+            }
+            if (adm["mdnsEnabled"].is<bool>()) {
+              localPrefs.putBool("mdnsEn", adm["mdnsEnabled"].as<bool>());
             }
             if (adm["mdns"].is<const char *>()) {
               String mn = adm["mdns"].as<String>();
@@ -6098,9 +6133,13 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     WiFi.setSleep(false);
     syncTime();
-    if (MDNS.begin(mdnsName.c_str())) {
-      MDNS.addService("http", "tcp", 80);
-      Serial.println("[MDNS] Started: http://" + mdnsName + ".local");
+    if (mdnsEnabled) {
+      if (MDNS.begin(mdnsName.c_str())) {
+        MDNS.addService("http", "tcp", 80);
+        Serial.println("[MDNS] Started: http://" + mdnsName + ".local");
+      }
+    } else {
+      Serial.println("[MDNS] Disabled by settings");
     }
     pendingWebServerRestart = false;
   }
@@ -6133,15 +6172,20 @@ void loop() {
     WiFi.setSleep(false);
     setupWebServer(); // Safe: never duplicates routes or kills active sockets
     MDNS.end();
-    bool mdnsStarted = MDNS.begin(mdnsName.c_str());
-    if (mdnsStarted) {
-      MDNS.addService("http", "tcp", 80);
+    bool mdnsStarted = false;
+    if (mdnsEnabled) {
+      mdnsStarted = MDNS.begin(mdnsName.c_str());
+      if (mdnsStarted) {
+        MDNS.addService("http", "tcp", 80);
+      }
     }
     Serial.println("[WIFI] Reconnected! IP: " + WiFi.localIP().toString());
     Serial.println("[SERVER] Web server active after WiFi reconnect: http://" +
                    WiFi.localIP().toString());
     if (mdnsStarted) {
       Serial.println("[MDNS] Restarted: http://" + mdnsName + ".local");
+    } else if (!mdnsEnabled) {
+      Serial.println("[MDNS] Disabled by settings");
     }
     syncTime();
   }

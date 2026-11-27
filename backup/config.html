@@ -3096,6 +3096,24 @@
           </div>
           <div class="setting-row">
             <div class="setting-info">
+              <div class="setting-label">Enable mDNS</div>
+              <div class="setting-sub">
+                Access this device using a local hostname (default:
+                http://smarthome.local)
+              </div>
+            </div>
+            <label class="sm-toggle">
+              <input
+                type="checkbox"
+                id="adminMdnsEnable"
+                checked
+                onchange="toggleMdnsInputState()"
+              />
+              <span class="sm-toggle-track"></span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
               <div class="setting-label">Default mDNS Addresses</div>
               <div class="setting-sub" id="defaultMdnsList">Loading...</div>
             </div>
@@ -3108,6 +3126,7 @@
           </div>
           <div
             class="setting-row"
+            id="mdnsCustomRow"
             style="flex-direction: column; align-items: flex-start; gap: 10px"
           >
             <div class="setting-label">Custom mDNS Name</div>
@@ -3119,7 +3138,7 @@
                 class="cfg-input"
                 type="text"
                 id="adminMdnsName"
-                placeholder="smarthomeXXXX"
+                placeholder="smarthome"
                 maxlength="32"
                 style="max-width: 200px"
               />
@@ -4950,6 +4969,10 @@
 
         if (panelId === "panel-admin-apikey") {
           loadAdminApiKeySettings();
+        }
+
+        if (panelId === "panel-admin-mdns") {
+          loadMdnsSettings();
         }
 
         if (panelId === "panel-admin-location") {
@@ -7650,9 +7673,23 @@
         );
       }
 
+      function toggleMdnsInputState() {
+        var enableEl = document.getElementById("adminMdnsEnable");
+        var inputEl = document.getElementById("adminMdnsName");
+        var customRow = document.getElementById("mdnsCustomRow");
+        var isEnabled = enableEl ? enableEl.checked : true;
+
+        if (inputEl) inputEl.disabled = !isEnabled;
+        if (customRow) customRow.style.opacity = isEnabled ? "1" : "0.5";
+      }
+
       function loadMdnsSettings() {
         apiGet("/api/admin/mdns")
           .then(function (d) {
+            var isEnabled = !(d && d.enabled === false);
+            var enableEl = document.getElementById("adminMdnsEnable");
+            if (enableEl) enableEl.checked = isEnabled;
+
             var defaultListEl = document.getElementById("defaultMdnsList");
             if (defaultListEl) {
               var defMdns = (d && d.defaultMdns) || "smarthome";
@@ -7673,69 +7710,95 @@
             }
 
             var defaultEl = document.getElementById("defaultMdnsName");
+            var currentMdns =
+              d && d.mdns
+                ? d.mdns
+                : d && d.defaultMdns
+                  ? d.defaultMdns
+                  : "smarthome";
             if (defaultEl) {
-              var currentMdns =
-                d && d.mdns
-                  ? d.mdns
-                  : d && d.defaultMdns
-                    ? d.defaultMdns
-                    : "smarthome";
-              var url = "http://" + currentMdns + ".local";
-              defaultEl.innerHTML =
-                '<a href="' +
-                url +
-                '" target="_blank" style="color: #60a5fa; text-decoration: underline;">' +
-                url +
-                "</a>";
+              if (isEnabled) {
+                var url = "http://" + currentMdns + ".local";
+                defaultEl.innerHTML =
+                  '<a href="' +
+                  url +
+                  '" target="_blank" style="color: #60a5fa; text-decoration: underline;">' +
+                  url +
+                  "</a>";
+              } else {
+                defaultEl.innerHTML =
+                  '<span style="color: #f87171;">Disabled</span>';
+              }
             }
+
             var input = document.getElementById("adminMdnsName");
             if (input) {
-              input.value = d && d.mdns ? d.mdns : d.defaultMdns || "smarthome";
+              input.value = currentMdns;
             }
+            toggleMdnsInputState();
           })
           .catch(function () {});
       }
 
       function saveMdnsSettings() {
+        var enableEl = document.getElementById("adminMdnsEnable");
+        var enabled = enableEl ? enableEl.checked : true;
         var input = document.getElementById("adminMdnsName");
         var newMdns = input ? input.value.trim() : "";
-        if (!newMdns) {
-          alert("Please enter mDNS name");
-          return;
-        }
-        if (newMdns.length > 32) {
-          alert("mDNS name must be 32 characters or less");
-          return;
-        }
-        if (/[^a-zA-Z0-9-]/.test(newMdns)) {
+
+        if (enabled) {
+          if (!newMdns) {
+            alert("Please enter mDNS name");
+            return;
+          }
+          if (newMdns.length > 32) {
+            alert("mDNS name must be 32 characters or less");
+            return;
+          }
+          if (/[^a-zA-Z0-9-]/.test(newMdns)) {
+            alert(
+              "mDNS name can only contain letters, numbers, and hyphens (no spaces).",
+            );
+            return;
+          }
+        } else if (
+          newMdns &&
+          (newMdns.length > 32 || /[^a-zA-Z0-9-]/.test(newMdns))
+        ) {
           alert(
-            "mDNS name can only contain letters, numbers, and hyphens (no spaces).",
+            "mDNS name must be 32 characters or less and only contain letters, numbers, and hyphens.",
           );
           return;
         }
 
         showPasswordModal(
-          "Enter admin credentials to save mDNS name",
+          "Enter admin credentials to save mDNS settings",
           function (data, adminUser, adminPass) {
             apiPost(
               "/api/admin/mdns",
               appendAdminCredentials(
-                "mdns=" + encodeURIComponent(newMdns),
+                "enabled=" + enabled + "&mdns=" + encodeURIComponent(newMdns),
                 adminUser,
                 adminPass,
               ),
             )
               .then(function (d) {
                 if (d.ok) {
-                  if (input) input.value = d.mdns || newMdns;
-                  alert(
-                    "mDNS name saved successfully!\n\nYou can now access the device at http://" +
-                      (d.mdns || newMdns) +
-                      ".local",
-                  );
+                  if (input && d.mdns) input.value = d.mdns;
+                  if (d.enabled) {
+                    alert(
+                      "mDNS enabled & saved!\n\nYou can now access the device at http://" +
+                        (d.mdns || newMdns) +
+                        ".local",
+                    );
+                  } else {
+                    alert(
+                      "mDNS has been disabled!\n\nUse the device's IP address to access the dashboard.",
+                    );
+                  }
                   loadMdnsSettings();
                 } else {
-                  alert(d.error || "Failed to save mDNS name");
+                  alert(d.error || "Failed to save mDNS settings");
                 }
               })
               .catch(function () {

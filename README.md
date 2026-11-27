@@ -194,6 +194,27 @@ Note: If your relay board is active-low, adjust wiring logic or relay module set
 6. Restart device.
 7. Connect to the same network and open the device IP (192.168.4.1) in browser.
 
+### First Flash from Web-ESP Tool
+
+1. First go to: https://espressif.github.io/esptool-js/
+2. Connect actual port by clicking 'Connect'
+3. Select Flash Address: 0x0
+4. Choose 'SMART_HOME_LOCAL.ino.merged.bin' file from 'build' folder
+5. Select Flash Mode: qio
+6. Select Flash Frequency: 80m
+7. Select Flash Size: 4MB
+8. You can select 'Erase all', if you want fresh boot
+9. Then click hit 'Program' button to upload the file, after successfully upload the file disconnect the USB from ESP32
+10. Power it again, you can see a blue LED is blinking, which means everything is perfect and we need to connect it with wifi
+11. Scan wifi from any device (Mobile/Laptop), you can see a ssid/hotspot name: 'ESP HOME'
+12. Connect with 'ESP HOME' and enter IP: 192.168.4.1 in browser, then connect with any active router by selecting and entering its password
+13. Then in your browser type 'http://smarthome.local/upload' or 'esp32_ip_address>/upload'
+14. Then you will enter into uploader section, default user name will be 'esp', password will be '456456'
+15. Then drag and drop all the '.gz' files from data folder, and click 'Upload'
+16. Now your device is fully ready to use
+
+![Web Upload](screenshots/upload_bin.png)
+
 ## First Login
 
 - Default admin user: <span style="color: #00C853;">esp</span>
