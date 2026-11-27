@@ -59,7 +59,8 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 20px;
+        padding: 16px;
+        overflow-y: auto; /* Prevents clipping on short/landscape mobile screens */
       }
 
       .login-overlay.hidden {
@@ -80,6 +81,7 @@
       .login-box {
         position: relative;
         overflow: hidden;
+        margin: auto; /* Safe vertical centering when scrolling */
         background: linear-gradient(
           165deg,
           rgba(30, 41, 59, 0.62) 0%,
@@ -88,10 +90,10 @@
         backdrop-filter: blur(20px);
         -webkit-backdrop-filter: blur(20px);
         border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 26px;
-        padding: 38px 32px 32px;
+        border-radius: 22px;
+        padding: 24px 24px 22px;
         width: 100%;
-        max-width: 390px;
+        max-width: 375px;
         box-shadow:
           0 24px 60px rgba(0, 0, 0, 0.65),
           inset 0 1px 0 rgba(255, 255, 255, 0.14);
@@ -116,10 +118,10 @@
       }
 
       .login-lock {
-        width: 60px;
-        height: 60px;
-        margin: 0 auto 18px;
-        border-radius: 18px;
+        width: 48px;
+        height: 48px;
+        margin: 0 auto 12px;
+        border-radius: 14px;
         background: linear-gradient(
           135deg,
           rgba(37, 99, 235, 0.25),
@@ -135,8 +137,8 @@
       }
 
       .login-lock svg {
-        width: 28px;
-        height: 28px;
+        width: 22px;
+        height: 22px;
         stroke: #60a5fa;
         fill: none;
         stroke-width: 1.8;
@@ -147,30 +149,30 @@
       .login-box h2 {
         text-align: center;
         color: #f8fafc;
-        font-size: 1.35rem;
+        font-size: 1.2rem;
         font-weight: 700;
-        letter-spacing: 2.5px;
+        letter-spacing: 2px;
         text-transform: uppercase;
-        margin-bottom: 6px;
+        margin-bottom: 4px;
       }
 
       .login-box .login-sub {
         text-align: center;
         color: #94a3b8;
-        font-size: 0.82rem;
-        margin-bottom: 26px;
+        font-size: 0.78rem;
+        margin-bottom: 18px;
       }
 
       .login-field {
-        margin-bottom: 18px;
+        margin-bottom: 13px;
       }
 
       .login-field label {
         display: block;
-        font-size: 0.74rem;
+        font-size: 0.72rem;
         font-weight: 600;
         color: #94a3b8;
-        margin-bottom: 7px;
+        margin-bottom: 5px;
         letter-spacing: 0.8px;
         text-transform: uppercase;
       }
@@ -183,9 +185,9 @@
 
       .login-input-icon {
         position: absolute;
-        left: 14px;
-        width: 18px;
-        height: 18px;
+        left: 12px;
+        width: 16px;
+        height: 16px;
         stroke: #64748b;
         fill: none;
         stroke-width: 1.8;
@@ -197,12 +199,12 @@
 
       .login-field input {
         width: 100%;
-        padding: 13px 44px 13px 42px;
-        border-radius: 13px;
+        padding: 10px 40px 10px 38px;
+        border-radius: 11px;
         border: 1px solid rgba(255, 255, 255, 0.09);
         background: rgba(15, 23, 42, 0.65);
         color: #f1f5f9;
-        font-size: 0.92rem;
+        font-size: 0.9rem;
         outline: none;
         transition:
           border-color 0.2s ease,
@@ -226,9 +228,9 @@
 
       .login-eye-btn {
         position: absolute;
-        right: 10px;
-        width: 32px;
-        height: 32px;
+        right: 8px;
+        width: 30px;
+        height: 30px;
         border: none;
         border-radius: 8px;
         background: transparent;
@@ -252,8 +254,8 @@
       }
 
       .login-eye-btn svg {
-        width: 18px;
-        height: 18px;
+        width: 16px;
+        height: 16px;
         stroke: currentColor;
         fill: none;
         stroke-width: 1.8;
@@ -272,15 +274,15 @@
 
       .login-actions {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 10px;
-        margin-top: 22px;
+        margin-top: 16px;
       }
 
       .login-action-btn {
-        padding: 12px 10px;
-        border-radius: 12px;
-        font-size: 0.85rem;
+        padding: 10px 12px;
+        border-radius: 11px;
+        font-size: 0.84rem;
         font-weight: 600;
         cursor: pointer;
         border: 1px solid rgba(255, 255, 255, 0.1);
@@ -309,12 +311,6 @@
         color: #f2cc60;
       }
 
-      .btn-cancel {
-        background: rgba(255, 255, 255, 0.07);
-        border-color: rgba(255, 255, 255, 0.12);
-        color: #cbd5e1;
-      }
-
       .btn-login {
         background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
         border-color: rgba(96, 165, 250, 0.4);
@@ -323,8 +319,8 @@
       }
 
       .login-forget-box {
-        margin-top: 16px;
-        padding-top: 14px;
+        margin-top: 12px;
+        padding-top: 10px;
         border-top: 1px solid rgba(255, 255, 255, 0.08);
       }
 
@@ -333,15 +329,19 @@
       }
 
       .login-forget-text {
-        font-size: 0.8rem;
+        font-size: 0.78rem;
         font-weight: 600;
         color: #e2e8f0;
-        margin-bottom: 8px;
+        margin-bottom: 6px;
         text-align: center;
       }
 
+      .login-forget-text:empty {
+        display: none;
+      }
+
       .login-forget-bar {
-        height: 8px;
+        height: 7px;
         background: rgba(255, 255, 255, 0.08);
         border-radius: 99px;
         overflow: hidden;
@@ -357,15 +357,18 @@
       .login-error {
         text-align: center;
         color: #f87171;
-        font-size: 0.8rem;
+        font-size: 0.78rem;
         font-weight: 500;
-        margin-top: 14px;
-        min-height: 20px;
         line-height: 1.4;
       }
 
+      .login-error:empty {
+        display: none; /* Removes dead empty space at bottom of card */
+      }
+
       .login-error:not(:empty) {
-        padding: 10px 12px;
+        margin-top: 12px;
+        padding: 8px 10px;
         border-radius: 10px;
         background: rgba(255, 255, 255, 0.04);
         border: 1px solid rgba(255, 255, 255, 0.08);
@@ -859,8 +862,51 @@
           border-radius: 14px;
         }
 
+        /* Inside existing @media (max-width: 400px) */
+        .login-overlay {
+          padding: 12px;
+        }
+
         .login-box {
-          padding: 32px 24px;
+          padding: 20px 18px 18px;
+          border-radius: 18px;
+        }
+
+        .login-lock {
+          width: 42px;
+          height: 42px;
+          margin-bottom: 10px;
+        }
+
+        .login-box h2 {
+          font-size: 1.1rem;
+        }
+      }
+
+      /* Mobile landscape / soft keyboard open */
+      @media (max-height: 520px) {
+        .login-box {
+          padding: 16px 20px;
+        }
+
+        .login-lock {
+          display: none;
+        }
+
+        .login-box .login-sub {
+          margin-bottom: 12px;
+        }
+      }
+
+      /* Tablet & larger screens */
+      @media (min-width: 768px) {
+        .login-box {
+          max-width: 390px;
+          padding: 26px 28px 24px;
+        }
+
+        .page {
+          max-width: 600px;
         }
       }
     </style>
@@ -934,13 +980,6 @@
             id="btnForget"
           >
             Forget
-          </button>
-          <button
-            type="button"
-            class="login-action-btn btn-cancel"
-            id="btnCancel"
-          >
-            Cancel
           </button>
           <button
             type="button"
@@ -1289,7 +1328,6 @@
       var loginScreen = document.getElementById("loginScreen");
       var dashboard = document.getElementById("dashboard");
       var btnForget = document.getElementById("btnForget");
-      var btnCancel = document.getElementById("btnCancel");
       var btnLogin = document.getElementById("btnLogin");
       var loginError = document.getElementById("loginError");
       var loginUserInput = document.getElementById("loginUser");
@@ -1833,6 +1871,9 @@
 
       function startLoginForgetFlow() {
         stopLoginForgetPoll();
+        if (!loginLockoutTimer) {
+          loginError.textContent = "";
+        }
         btnForget.disabled = true;
         loginForgetBox.classList.remove("hidden");
         loginForgetBar.style.width = "0%";
@@ -1874,16 +1915,14 @@
               loginForgetBar.style.width =
                 Math.min(100, ((5000 - d.remainingMs) / 5000) * 100) + "%";
               loginForgetText.textContent =
-                "Step 1/2: Press & hold onboard BOOT button within " +
-                rem +
-                "s...";
+                "Hold onboard BOOT button within " + rem + "s";
             } else if (d.state === "holding") {
               var held = (d.heldMs / 1000).toFixed(1);
               loginForgetBar.style.background = "#2f81f7";
               loginForgetBar.style.width =
                 Math.min(100, (d.heldMs / 10000) * 100) + "%";
               loginForgetText.textContent =
-                "Step 2/2: Keep holding BOOT button... " + held + "s / 10.0s";
+                "Keep holding BOOT button " + held + "s / 10s";
             } else {
               stopLoginForgetPoll();
               btnForget.disabled = false;
@@ -1901,10 +1940,13 @@
                 loginPassInput.value = "";
                 loginError.style.color = "#86efac";
                 loginError.textContent =
-                  "All saved users erased! Default admin created: esp / 456456";
+                  "All Users erased! Default Admin: esp / 456456";
               } else {
                 loginForgetBar.style.background = "#f85149";
-                loginForgetText.textContent = d.message || "Reset cancelled.";
+                if (d.state === "timeout") {
+                  loginForgetBar.style.width = "100%";
+                }
+                loginForgetText.textContent = "";
                 loginError.style.color = "#f87171";
                 loginError.textContent =
                   d.message || "Hardware verification failed. Try again.";
@@ -1912,25 +1954,6 @@
             }
           })
           .catch(function () {});
-      }
-
-      function cancelLoginScreen() {
-        if (loginForgetTimer) {
-          stopLoginForgetPoll();
-          fetch("/api/upload-auth/forget/cancel", { method: "POST" }).catch(
-            function () {},
-          );
-        }
-        btnForget.disabled = false;
-        loginForgetBox.classList.add("hidden");
-        loginForgetBar.style.width = "0%";
-        loginForgetText.textContent = "";
-        loginUserInput.value = "";
-        loginPassInput.value = "";
-        if (loginPassInput.type !== "password") toggleLoginPassword();
-        if (!loginLockoutTimer) {
-          loginError.textContent = "";
-        }
       }
 
       /* ── Login via API ── */
@@ -2012,7 +2035,6 @@
       }
 
       btnForget.addEventListener("click", startLoginForgetFlow);
-      btnCancel.addEventListener("click", cancelLoginScreen);
       btnLogin.addEventListener("click", doLogin);
       loginPassInput.addEventListener("keydown", function (e) {
         if (e.key === "Enter") doLogin();

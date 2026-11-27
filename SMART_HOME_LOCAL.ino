@@ -485,12 +485,12 @@ async function pollForgetStatus(){
       const rem = (d.remainingMs / 1000).toFixed(1);
       forgetBar.style.background = 'var(--warn)';
       forgetBar.style.width = Math.min(100, ((5000 - d.remainingMs) / 5000) * 100) + '%';
-      forgetText.textContent = 'Step 1/2: Press & hold onboard BOOT button within ' + rem + 's...';
+      forgetText.textContent = "Hold onboard BOOT button within " + rem + "s";
     } else if(d.state === 'holding'){
       const held = (d.heldMs / 1000).toFixed(1);
       forgetBar.style.background = 'var(--acc)';
       forgetBar.style.width = Math.min(100, (d.heldMs / 10000) * 100) + '%';
-      forgetText.textContent = 'Step 2/2: Keep holding BOOT button... ' + held + 's / 10.0s';
+      forgetText.textContent = "Keep holding BOOT button " + held + "s / 10s";
     } else {
       clearInterval(forgetTimer);
       forgetTimer = null;
@@ -502,10 +502,12 @@ async function pollForgetStatus(){
         loginBtn.disabled = false;
         document.getElementById('uName').value = 'esp';
         document.getElementById('uPass').value = '';
-        showAuthAlert('ok', 'All saved users erased! Default admin created: esp / 456456');
+        showAuthAlert('ok', 'All Users erased! Default Admin: esp / 456456');
       } else {
         forgetBar.style.background = 'var(--err)';
-        forgetText.textContent = d.message || 'Reset cancelled.';
+        if(d.state === 'timeout') forgetBar.style.width = '100%';
+        forgetText.textContent = '';
+        forgetText.style.marginBottom = '0';
         showAuthAlert('err', d.message || 'Hardware verification failed. Try again.');
       }
     }
@@ -3056,7 +3058,7 @@ void serviceUploadForgetButton() {
       Serial.println("[AUTH] BOOT pressed in 5s window -> hold 10s to erase users");
     } else if ((int32_t)(now - ufWindowDeadlineMs) >= 0) {
       ufState = UF_TIMEOUT;
-      strncpy(ufStatusMsg, "Timed out: BOOT button was not pressed within 5 seconds.", sizeof(ufStatusMsg) - 1);
+      strncpy(ufStatusMsg, "Timed out: BOOT button was not pressed within 5s.", sizeof(ufStatusMsg) - 1);
       ufStatusMsg[sizeof(ufStatusMsg) - 1] = '\0';
       digitalWrite(LED_PIN, LOW);
       digitalWrite(BUILTIN_LED_PIN, LOW);
@@ -3070,7 +3072,7 @@ void serviceUploadForgetButton() {
         ufReleaseSinceMs = now;
       if (now - ufReleaseSinceMs >= UPLOAD_FORGET_DEBOUNCE_MS) {
         ufState = UF_RELEASED_EARLY;
-        strncpy(ufStatusMsg, "Cancelled: BOOT button was released before 10 seconds.", sizeof(ufStatusMsg) - 1);
+        strncpy(ufStatusMsg, "Cancelled: BOOT button was released before 10s.", sizeof(ufStatusMsg) - 1);
         ufStatusMsg[sizeof(ufStatusMsg) - 1] = '\0';
         digitalWrite(LED_PIN, LOW);
         digitalWrite(BUILTIN_LED_PIN, LOW);
