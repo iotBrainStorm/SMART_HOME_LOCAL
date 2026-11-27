@@ -1871,10 +1871,11 @@ void initDefaultUser() {
 bool verifyAdmin(const String &u, const String &p) {
   String targetUser = normalizeUserId(u);
   String targetPass = normalizeUserPass(p);
-  prefs.begin("users", true);
-  int n = prefs.getInt("cnt", 0);
+  Preferences localPrefs;
+  localPrefs.begin("users", true);
+  int n = localPrefs.getInt("cnt", 0);
   for (int i = 0; i < n; i++) {
-    String js = prefs.getString(("u" + String(i)).c_str(), "");
+    String js = localPrefs.getString(("u" + String(i)).c_str(), "");
     if (js.isEmpty())
       continue;
     JsonDocument d;
@@ -1884,11 +1885,11 @@ bool verifyAdmin(const String &u, const String &p) {
     if (normalizeUserId(d["id"].as<String>()) == targetUser &&
         storedPass == targetPass &&
         normalizeUserRole(d["role"].as<String>()) == "admin") {
-      prefs.end();
+      localPrefs.end();
       return true;
     }
   }
-  prefs.end();
+  localPrefs.end();
   return false;
 }
 
@@ -2119,10 +2120,11 @@ bool requireAdminVerification(AsyncWebServerRequest *req, bool forceAlways = fal
 bool verifyLogin(const String &u, const String &p, String &role) {
   String targetUser = normalizeUserId(u);
   String targetPass = normalizeUserPass(p);
-  prefs.begin("users", true);
-  int n = prefs.getInt("cnt", 0);
+  Preferences localPrefs;
+  localPrefs.begin("users", true);
+  int n = localPrefs.getInt("cnt", 0);
   for (int i = 0; i < n; i++) {
-    String js = prefs.getString(("u" + String(i)).c_str(), "");
+    String js = localPrefs.getString(("u" + String(i)).c_str(), "");
     if (js.isEmpty())
       continue;
     JsonDocument d;
@@ -2131,11 +2133,11 @@ bool verifyLogin(const String &u, const String &p, String &role) {
     String storedPass = normalizeUserPass(d["pass"].as<String>());
     if (normalizeUserId(d["id"].as<String>()) == targetUser && storedPass == targetPass) {
       role = normalizeUserRole(d["role"].as<String>());
-      prefs.end();
+      localPrefs.end();
       return true;
     }
   }
-  prefs.end();
+  localPrefs.end();
   return false;
 }
 
@@ -2952,8 +2954,8 @@ bool verifyUploadAdminCredentials(const String &user, const String &pass) {
   localPrefs.end();
 
   if (!anyAdminFound) {
-    return secureEquals(cleanUser.c_str(), PRIMARY_ADMIN_ID) &&
-           secureEquals(cleanPass.c_str(), PRIMARY_ADMIN_PASS);
+    return secureEquals(cleanUser.c_str(), configuredPrimaryAdminId.c_str()) &&
+           secureEquals(cleanPass.c_str(), configuredPrimaryAdminPass.c_str());
   }
   return matched;
 }
@@ -2971,10 +2973,29 @@ void generateUploadSessionToken(IPAddress clientIp) {
   uploadSessionLastSeenMs = millis();
 }
 
+void rotateWebSessionToken() {
+  webSessionToken = generateRandomHexToken(32);
+  Preferences localPrefs;
+  localPrefs.begin("admin", false);
+  localPrefs.putString("sesTok", webSessionToken);
+  localPrefs.end();
+}
+
 void invalidateUploadSession() {
   memset(uploadSessionToken, 0, sizeof(uploadSessionToken));
   uploadSessionIp = IPAddress(0, 0, 0, 0);
   uploadSessionLastSeenMs = 0;
+}
+
+void invalidateUploadSessionSafe(bool clearLockout = false) {
+  if (uploadAuthMutex && xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(300)) == pdTRUE) {
+    invalidateUploadSession();
+    if (clearLockout) {
+      uploadAuthFailedAttempts = 0;
+      uploadAuthLocked = false;
+    }
+    xSemaphoreGive(uploadAuthMutex);
+  }
 }
 
 bool isUploadRequestAuthorized(AsyncWebServerRequest *req) {
@@ -3006,13 +3027,8 @@ bool isUploadRequestAuthorized(AsyncWebServerRequest *req) {
 // Erases ALL saved admin & normal users in NVS and creates ONLY default admin (esp / 456456)
 bool resetAllUsersForUploadForget() {
   resetUsersToSingleDefaultAdmin();
-
-  if (uploadAuthMutex && xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(300)) == pdTRUE) {
-    uploadAuthFailedAttempts = 0;
-    uploadAuthLocked = false;
-    invalidateUploadSession();
-    xSemaphoreGive(uploadAuthMutex);
-  }
+  rotateWebSessionToken();           // Invalidate all active index.html & config.html sessions
+  invalidateUploadSessionSafe(true); // Invalidate /upload session & unlock /upload
 
   // Also clear main Smart Home login lockout so user is never stuck
   failedAttempts = 0;
@@ -3442,6 +3458,21 @@ void setupWebServer() {
     req->send(res);
   });
 
+  // --- POST /api/upload-auth/forget/cancel (Stops active 5s+10s forget flow) ---
+  server.on("/api/upload-auth/forget/cancel", HTTP_POST, [](AsyncWebServerRequest *req) {
+    if (uploadAuthMutex && xSemaphoreTake(uploadAuthMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+      ufState = UF_IDLE;
+      ufWindowDeadlineMs = 0;
+      ufHoldStartMs = 0;
+      ufReleaseSinceMs = 0;
+      ufStatusMsg[0] = '\0';
+      xSemaphoreGive(uploadAuthMutex);
+    }
+    digitalWrite(LED_PIN, LOW);
+    digitalWrite(BUILTIN_LED_PIN, LOW);
+    req->send(200, "application/json", "{\"ok\":true}");
+  });
+
   // --- POST /api/fs/reboot (Authenticated reboot from /upload) ---
   server.on("/api/fs/reboot", HTTP_POST, [](AsyncWebServerRequest *req) {
     if (!isUploadRequestAuthorized(req)) {
@@ -3678,25 +3709,6 @@ void setupWebServer() {
   });
 
   server.on("/api/login", HTTP_POST, [](AsyncWebServerRequest *req) {
-    bool resetAdminRequested = false;
-    if (req->hasParam("resetAdmin", true)) {
-      String resetValue = req->getParam("resetAdmin", true)->value();
-      resetValue.trim();
-      resetValue.toLowerCase();
-      resetAdminRequested = (resetValue == "1" || resetValue == "true" || resetValue == "yes" || resetValue == "on");
-    }
-
-    if (resetAdminRequested) {
-      if (consumeBootButtonHoldForReset()) {
-        resetAdminToFactoryDefault();
-        registerAuthAttempt(true);
-        req->send(200, "application/json", "{\"ok\":true,\"resetAdmin\":true,\"msg\":\"Admin reset to default (esp / 456456).\"}");
-      } else {
-        req->send(400, "application/json", "{\"ok\":false,\"resetAdmin\":true,\"error\":\"Hold BOOT button for 5s first.\"}");
-      }
-      return;
-    }
-
     updateLockoutState();
     if (isLockedOut) {
       sendAuthFailureResponse(req, "Device is locked");
@@ -4532,8 +4544,10 @@ void setupWebServer() {
         prefs.remove(("u" + String(i)).c_str());
       prefs.putInt("cnt", writeIdx);
       prefs.end();
+      rotateWebSessionToken(); // Kick out the removed user's active browser sessions
       notifyStorage();
-      req->send(200, "application/json", "{\"ok\":true,\"removed\":" + String(matchedUsers) + "}");
+      req->send(200, "application/json",
+                "{\"ok\":true,\"removed\":" + String(matchedUsers) + ",\"token\":\"" + webSessionToken + "\"}");
     });
 
     server.on("/api/users/admin/edit", HTTP_POST, [](AsyncWebServerRequest *req) {
@@ -4621,8 +4635,10 @@ void setupWebServer() {
       }
       prefs.end();
       persistConfiguredPrimaryAdmin(newAdminId, newAdminPass);
+      rotateWebSessionToken();       // Invalidate other index.html/config.html sessions
+      invalidateUploadSessionSafe(); // Force /upload to re-login with new admin credentials
       notifyStorage();
-      req->send(200, "application/json", "{\"ok\":true}");
+      req->send(200, "application/json", "{\"ok\":true,\"token\":\"" + webSessionToken + "\"}");
     });
 
     server.on("/api/admin/device-name", HTTP_GET, [](AsyncWebServerRequest *req) {
@@ -4963,6 +4979,13 @@ void setupWebServer() {
 
     server.on("/api/admin/validation", HTTP_GET, [](AsyncWebServerRequest *req) {
       updateLockoutState();
+      String reqToken = "";
+      if (req->hasHeader("X-Session-Token")) {
+        reqToken = req->getHeader("X-Session-Token")->value();
+        reqToken.trim();
+      }
+      bool sesOk = (!loginEnabled) || (!reqToken.isEmpty() && reqToken == webSessionToken);
+
       JsonDocument d;
       d["loginEnabled"] = loginEnabled;
       d["loginMode"] = loginMode;
@@ -4972,7 +4995,10 @@ void setupWebServer() {
       d["failedAttempts"] = failedAttempts;
       d["locked"] = isLockedOut;
       d["remainingSec"] = getLockoutRemainingSec();
+      d["sessionValid"] = sesOk;
+
       AsyncResponseStream *response = req->beginResponseStream("application/json");
+      response->addHeader("Cache-Control", "no-store");
       serializeJson(d, *response);
       req->send(response);
     });
@@ -5616,6 +5642,8 @@ void setupWebServer() {
               localPrefs.putInt("cnt", idx);
               localPrefs.end();
               persistConfiguredPrimaryAdmin(restoredAdminId, restoredAdminPass);
+              rotateWebSessionToken();
+              invalidateUploadSessionSafe(true);
             }
           }
 
@@ -5812,6 +5840,7 @@ void setupWebServer() {
       addResetStep(steps, "default-admin", "Default admin user restored to esp / 456456", 650);
       resetValidationToDefault();
       resetApiKeyToDefault();
+      invalidateUploadSessionSafe(true);
       addResetStep(steps, "validation", "Login and verification restored to default (Enabled)", 520);
       addResetStep(steps, "normal-users", "All normal users cleared", 580);
       addResetStep(steps, "wifi-credentials", "WiFi credentials cleared", 520);

@@ -13,6 +13,10 @@
         -webkit-tap-highlight-color: transparent;
       }
 
+      html {
+        background: #121212;
+      }
+
       html,
       body {
         width: 100%;
@@ -27,11 +31,12 @@
         background: #121212;
         min-height: 100vh;
         color: #e0e0e0;
+        transition: opacity 0.12s ease;
       }
 
-      body.app-init .login-overlay,
-      body.app-init #dashboard {
+      body.app-init {
         visibility: hidden;
+        opacity: 0;
       }
 
       /* ── Login Screen ── */
@@ -265,80 +270,88 @@
         opacity: 1;
       }
 
-      .remember-field {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
+      .login-actions {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 10px;
-        flex-wrap: wrap;
-        margin: 6px 0 22px;
-        padding: 10px 12px;
+        margin-top: 22px;
+      }
+
+      .login-action-btn {
+        padding: 12px 10px;
         border-radius: 12px;
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.05);
-      }
-
-      .remember-option {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-
-      .remember-option input[type="checkbox"] {
-        width: 16px;
-        height: 16px;
-        accent-color: #2563eb;
+        font-size: 0.85rem;
+        font-weight: 600;
         cursor: pointer;
-        border-radius: 4px;
-      }
-
-      .remember-option label {
-        font-size: 0.8rem;
-        font-weight: 500;
-        color: #94a3b8;
-        cursor: pointer;
-        user-select: none;
-        transition: color 0.15s ease;
-      }
-
-      .remember-option:hover label {
-        color: #e2e8f0;
-      }
-
-      .login-btn {
-        width: 100%;
-        padding: 14px;
-        border-radius: 14px;
-        border: 1px solid rgba(96, 165, 250, 0.35);
-        background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
-        color: #fff;
-        font-size: 0.92rem;
-        font-weight: 700;
-        letter-spacing: 1.2px;
-        cursor: pointer;
-        box-shadow:
-          0 8px 20px rgba(37, 99, 235, 0.35),
-          inset 0 1px 0 rgba(255, 255, 255, 0.25);
+        border: 1px solid rgba(255, 255, 255, 0.1);
         transition:
-          transform 0.15s ease,
-          box-shadow 0.2s ease,
-          filter 0.2s ease;
+          transform 0.12s ease,
+          filter 0.15s ease,
+          opacity 0.15s ease;
       }
 
-      .login-btn:hover:not(:disabled) {
-        filter: brightness(1.08);
-        box-shadow:
-          0 10px 24px rgba(37, 99, 235, 0.45),
-          inset 0 1px 0 rgba(255, 255, 255, 0.3);
+      .login-action-btn:hover:not(:disabled) {
+        filter: brightness(1.1);
       }
 
-      .login-btn:active:not(:disabled) {
-        transform: scale(0.985);
+      .login-action-btn:active:not(:disabled) {
+        transform: scale(0.98);
       }
 
-      .login-btn:disabled {
-        opacity: 0.65;
+      .login-action-btn:disabled {
+        opacity: 0.5;
         cursor: not-allowed;
+      }
+
+      .btn-forget {
+        background: rgba(210, 153, 34, 0.16);
+        border-color: rgba(210, 153, 34, 0.45);
+        color: #f2cc60;
+      }
+
+      .btn-cancel {
+        background: rgba(255, 255, 255, 0.07);
+        border-color: rgba(255, 255, 255, 0.12);
+        color: #cbd5e1;
+      }
+
+      .btn-login {
+        background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
+        border-color: rgba(96, 165, 250, 0.4);
+        color: #fff;
+        box-shadow: 0 6px 16px rgba(37, 99, 235, 0.3);
+      }
+
+      .login-forget-box {
+        margin-top: 16px;
+        padding-top: 14px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .login-forget-box.hidden {
+        display: none;
+      }
+
+      .login-forget-text {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #e2e8f0;
+        margin-bottom: 8px;
+        text-align: center;
+      }
+
+      .login-forget-bar {
+        height: 8px;
+        background: rgba(255, 255, 255, 0.08);
+        border-radius: 99px;
+        overflow: hidden;
+      }
+
+      .login-forget-bar > div {
+        height: 100%;
+        width: 0%;
+        background: #d29922;
+        transition: width 0.18s linear;
       }
 
       .login-error {
@@ -854,7 +867,7 @@
   </head>
   <body class="app-init">
     <!-- ── Login Screen ── -->
-    <div class="login-overlay" id="loginScreen">
+    <div class="login-overlay hidden" id="loginScreen">
       <div class="login-box">
         <div class="login-lock">
           <svg viewBox="0 0 24 24">
@@ -914,18 +927,35 @@
           </div>
         </div>
 
-        <div class="remember-field">
-          <div class="remember-option">
-            <input type="checkbox" id="rememberMe" />
-            <label for="rememberMe">Remember me</label>
-          </div>
-          <div class="remember-option">
-            <input type="checkbox" id="resetAdmin" />
-            <label for="resetAdmin">Reset admin</label>
-          </div>
+        <div class="login-actions">
+          <button
+            type="button"
+            class="login-action-btn btn-forget"
+            id="btnForget"
+          >
+            Forget
+          </button>
+          <button
+            type="button"
+            class="login-action-btn btn-cancel"
+            id="btnCancel"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="login-action-btn btn-login"
+            id="btnLogin"
+          >
+            Login
+          </button>
         </div>
 
-        <button class="login-btn" id="loginBtn">SIGN IN</button>
+        <div id="loginForgetBox" class="login-forget-box hidden">
+          <div id="loginForgetText" class="login-forget-text"></div>
+          <div class="login-forget-bar"><div id="loginForgetBar"></div></div>
+        </div>
+
         <div class="login-error" id="loginError"></div>
       </div>
     </div>
@@ -1220,17 +1250,12 @@
     <script>
       /* ── Session Management ── */
       var SESSION_KEY = "smartHomeSession";
-      var REMEMBER_KEY = "smartHomeRemember";
       var ROLE_KEY = "smartHomeRole";
       var USER_KEY = "smartHomeUser";
       var TOKEN_KEY = "smartHomeToken";
 
       function getSessionToken() {
-        return (
-          sessionStorage.getItem(TOKEN_KEY) ||
-          localStorage.getItem(TOKEN_KEY) ||
-          ""
-        );
+        return sessionStorage.getItem(TOKEN_KEY) || "";
       }
 
       function isLoggedIn() {
@@ -1239,44 +1264,40 @@
         );
       }
 
-      function setLoggedIn(remember, role, user, token) {
+      function setLoggedIn(role, user, token) {
         sessionStorage.setItem(SESSION_KEY, "true");
         sessionStorage.setItem(ROLE_KEY, role || "user");
         if (user) sessionStorage.setItem(USER_KEY, user);
         if (token) sessionStorage.setItem(TOKEN_KEY, token);
-        if (remember) {
-          localStorage.setItem(REMEMBER_KEY, "true");
-          if (token) localStorage.setItem(TOKEN_KEY, token);
-        }
       }
 
-      function checkRemembered() {
-        return (
-          localStorage.getItem(REMEMBER_KEY) === "true" &&
-          !!localStorage.getItem(TOKEN_KEY)
-        );
-      }
-
-      function logout() {
+      function clearSessionStorage() {
         sessionStorage.removeItem(SESSION_KEY);
         sessionStorage.removeItem(ROLE_KEY);
         sessionStorage.removeItem(USER_KEY);
         sessionStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(REMEMBER_KEY);
+        localStorage.removeItem("smartHomeRemember");
         localStorage.removeItem(TOKEN_KEY);
+      }
+
+      function logout() {
+        clearSessionStorage();
         window.location.reload();
       }
 
       /* ── DOM Elements ── */
       var loginScreen = document.getElementById("loginScreen");
       var dashboard = document.getElementById("dashboard");
-      var loginBtn = document.getElementById("loginBtn");
+      var btnForget = document.getElementById("btnForget");
+      var btnCancel = document.getElementById("btnCancel");
+      var btnLogin = document.getElementById("btnLogin");
       var loginError = document.getElementById("loginError");
       var loginUserInput = document.getElementById("loginUser");
       var loginPassInput = document.getElementById("loginPass");
-      var rememberMeCheckbox = document.getElementById("rememberMe");
-      var resetAdminCheckbox = document.getElementById("resetAdmin");
-      var RESET_ADMIN_REQUEST_DELAY_MS = 5200;
+      var loginForgetBox = document.getElementById("loginForgetBox");
+      var loginForgetText = document.getElementById("loginForgetText");
+      var loginForgetBar = document.getElementById("loginForgetBar");
+      var loginForgetTimer = null;
 
       /* ── Toggle Cards ── */
       var cards = document.querySelectorAll(".card");
@@ -1723,6 +1744,16 @@
         });
 
       var loginLockoutTimer = null;
+      var appRevealed = false;
+
+      function revealApp() {
+        if (appRevealed) return;
+        appRevealed = true;
+        document.body.classList.remove("app-init");
+      }
+
+      // Safety net so page never stays hidden if ESP32 is slow
+      setTimeout(revealApp, 2500);
 
       function formatCountdown(sec) {
         var m = Math.floor(sec / 60);
@@ -1746,29 +1777,29 @@
         var remSec = info.remainingSec || 0;
 
         if (locked) {
-          loginBtn.disabled = true;
+          btnLogin.disabled = true;
           loginError.style.color = "#f87171";
           if (mode === "restart_only") {
-            loginBtn.textContent = "LOCKED (RESTART REQUIRED)";
+            btnLogin.textContent = "Locked";
             loginError.textContent =
               "Failed Attempts: " +
               failed +
               "/" +
               maxAtt +
-              " — Device restart required to unlock!";
+              " — Restart required (or use Forget with physical BOOT button).";
           } else {
             var tick = function () {
               if (remSec <= 0) {
                 clearInterval(loginLockoutTimer);
                 loginLockoutTimer = null;
-                loginBtn.disabled = false;
-                loginBtn.textContent = "SIGN IN";
+                btnLogin.disabled = false;
+                btnLogin.textContent = "Login";
                 loginError.style.color = "#86efac";
                 loginError.textContent =
-                  "Lockout expired. You can try signing in again.";
+                  "Lockout expired. You can try logging in again.";
                 return;
               }
-              loginBtn.textContent = "LOCKED (" + formatCountdown(remSec) + ")";
+              btnLogin.textContent = "Locked";
               loginError.textContent =
                 "Failed Attempts: " +
                 failed +
@@ -1782,8 +1813,8 @@
             loginLockoutTimer = setInterval(tick, 1000);
           }
         } else if (failed > 0) {
-          loginBtn.disabled = false;
-          loginBtn.textContent = "SIGN IN";
+          btnLogin.disabled = false;
+          btnLogin.textContent = "Login";
           loginError.style.color = "#f87171";
           loginError.textContent =
             (info.error || "Invalid credentials") +
@@ -1792,18 +1823,123 @@
         }
       }
 
+      /* ── Exact /upload 5s+10s Hardware BOOT Forget Flow ── */
+      function stopLoginForgetPoll() {
+        if (loginForgetTimer) {
+          clearInterval(loginForgetTimer);
+          loginForgetTimer = null;
+        }
+      }
+
+      function startLoginForgetFlow() {
+        stopLoginForgetPoll();
+        btnForget.disabled = true;
+        loginForgetBox.classList.remove("hidden");
+        loginForgetBar.style.width = "0%";
+        loginForgetBar.style.background = "#d29922";
+        loginForgetText.textContent = "Arming hardware reset...";
+
+        fetch("/api/upload-auth/forget/start", { method: "POST" })
+          .then(function (r) {
+            return r.json().then(function (d) {
+              return { ok: r.ok, data: d };
+            });
+          })
+          .then(function (res) {
+            if (!res.ok || !res.data || !res.data.ok) {
+              btnForget.disabled = false;
+              loginForgetText.textContent =
+                (res.data && res.data.error) ||
+                "Could not start forget process.";
+              return;
+            }
+            loginForgetTimer = setInterval(pollLoginForgetStatus, 250);
+            pollLoginForgetStatus();
+          })
+          .catch(function (e) {
+            btnForget.disabled = false;
+            loginForgetText.textContent = "Request failed: " + e.message;
+          });
+      }
+
+      function pollLoginForgetStatus() {
+        fetch("/api/upload-auth/forget/status", { cache: "no-store" })
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (d) {
+            if (d.state === "wait_press") {
+              var rem = (d.remainingMs / 1000).toFixed(1);
+              loginForgetBar.style.background = "#d29922";
+              loginForgetBar.style.width =
+                Math.min(100, ((5000 - d.remainingMs) / 5000) * 100) + "%";
+              loginForgetText.textContent =
+                "Step 1/2: Press & hold onboard BOOT button within " +
+                rem +
+                "s...";
+            } else if (d.state === "holding") {
+              var held = (d.heldMs / 1000).toFixed(1);
+              loginForgetBar.style.background = "#2f81f7";
+              loginForgetBar.style.width =
+                Math.min(100, (d.heldMs / 10000) * 100) + "%";
+              loginForgetText.textContent =
+                "Step 2/2: Keep holding BOOT button... " + held + "s / 10.0s";
+            } else {
+              stopLoginForgetPoll();
+              btnForget.disabled = false;
+              if (d.state === "done") {
+                if (loginLockoutTimer) {
+                  clearInterval(loginLockoutTimer);
+                  loginLockoutTimer = null;
+                }
+                loginForgetBar.style.background = "#3fb950";
+                loginForgetBar.style.width = "100%";
+                loginForgetText.textContent = "Reset complete!";
+                btnLogin.disabled = false;
+                btnLogin.textContent = "Login";
+                loginUserInput.value = "esp";
+                loginPassInput.value = "";
+                loginError.style.color = "#86efac";
+                loginError.textContent =
+                  "All saved users erased! Default admin created: esp / 456456";
+              } else {
+                loginForgetBar.style.background = "#f85149";
+                loginForgetText.textContent = d.message || "Reset cancelled.";
+                loginError.style.color = "#f87171";
+                loginError.textContent =
+                  d.message || "Hardware verification failed. Try again.";
+              }
+            }
+          })
+          .catch(function () {});
+      }
+
+      function cancelLoginScreen() {
+        if (loginForgetTimer) {
+          stopLoginForgetPoll();
+          fetch("/api/upload-auth/forget/cancel", { method: "POST" }).catch(
+            function () {},
+          );
+        }
+        btnForget.disabled = false;
+        loginForgetBox.classList.add("hidden");
+        loginForgetBar.style.width = "0%";
+        loginForgetText.textContent = "";
+        loginUserInput.value = "";
+        loginPassInput.value = "";
+        if (loginPassInput.type !== "password") toggleLoginPassword();
+        if (!loginLockoutTimer) {
+          loginError.textContent = "";
+        }
+      }
+
       /* ── Login via API ── */
-      function submitLoginRequest(u, p, resetAdminRequested) {
+      function submitLoginRequest(u, p) {
         fetch("/api/login", {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body:
-            "user=" +
-            encodeURIComponent(u) +
-            "&pass=" +
-            encodeURIComponent(p) +
-            "&resetAdmin=" +
-            (resetAdminRequested ? "true" : "false"),
+            "user=" + encodeURIComponent(u) + "&pass=" + encodeURIComponent(p),
         })
           .then(function (r) {
             return r.json().then(function (d) {
@@ -1811,43 +1947,25 @@
             });
           })
           .then(function (res) {
-            loginBtn.disabled = false;
-            loginBtn.textContent = "SIGN IN";
-
-            if (res.data && res.data.resetAdmin) {
-              if (res.ok) {
-                loginError.style.color = "#86efac";
-                loginError.textContent =
-                  res.data.msg ||
-                  "Admin reset to default (esp / 456456). Sign in now.";
-                loginUserInput.value = "esp";
-                loginPassInput.value = "456456";
-                if (resetAdminCheckbox) resetAdminCheckbox.checked = false;
-              } else {
-                loginError.style.color = "#f87171";
-                loginError.textContent =
-                  res.data.error ||
-                  "Hold BOOT for 5 seconds first, then press SIGN IN.";
-                loginPassInput.value = "";
-              }
-              return;
-            }
-
             if (res.ok && res.data.ok) {
-              setLoggedIn(
-                rememberMeCheckbox.checked,
-                res.data.role,
-                u,
-                res.data.token,
-              );
-              loginScreen.classList.add("hidden");
-              dashboard.classList.remove("hidden");
+              stopLoginForgetPoll();
+              setLoggedIn(res.data.role, u, res.data.token);
               loginError.textContent = "";
-              loadDeviceTimezone();
-              updateClock();
-              loadSwitches();
-              loadAutomationFeatureIndicators();
+              loginForgetBox.classList.add("hidden");
+              loadDashboard()
+                .then(function () {
+                  return loadDeviceTimezone();
+                })
+                .then(function () {
+                  updateClock();
+                  btnLogin.disabled = false;
+                  btnLogin.textContent = "Login";
+                  loginScreen.classList.add("hidden");
+                  dashboard.classList.remove("hidden");
+                });
             } else {
+              btnLogin.disabled = false;
+              btnLogin.textContent = "Login";
               loginPassInput.value = "";
               if (
                 res.data &&
@@ -1855,14 +1973,16 @@
               ) {
                 renderLoginAttemptStatus(res.data);
               } else {
+                loginError.style.color = "#f87171";
                 loginError.textContent =
                   (res.data && res.data.error) || "Invalid credentials";
               }
             }
           })
           .catch(function () {
-            loginBtn.disabled = false;
-            loginBtn.textContent = "SIGN IN";
+            btnLogin.disabled = false;
+            btnLogin.textContent = "Login";
+            loginError.style.color = "#f87171";
             loginError.textContent = "Connection failed";
           });
       }
@@ -1879,34 +1999,21 @@
       function doLogin() {
         var u = loginUserInput.value.trim();
         var p = loginPassInput.value;
-        var resetAdminRequested = !!(
-          resetAdminCheckbox && resetAdminCheckbox.checked
-        );
 
         loginError.style.color = "#f87171";
-
-        if (!resetAdminRequested && (!u || !p)) {
+        if (!u || !p) {
           loginError.textContent = "Please enter credentials";
           return;
         }
 
-        loginBtn.disabled = true;
-
-        if (resetAdminRequested) {
-          loginBtn.textContent = "HOLD BOOT...";
-          loginError.textContent = "Press and hold BOOT now for 5 seconds...";
-          setTimeout(function () {
-            loginBtn.textContent = "SIGNING IN...";
-            submitLoginRequest(u, p, true);
-          }, RESET_ADMIN_REQUEST_DELAY_MS);
-          return;
-        }
-
-        loginBtn.textContent = "SIGNING IN...";
-        submitLoginRequest(u, p, false);
+        btnLogin.disabled = true;
+        btnLogin.textContent = "Signing in...";
+        submitLoginRequest(u, p);
       }
 
-      loginBtn.addEventListener("click", doLogin);
+      btnForget.addEventListener("click", startLoginForgetFlow);
+      btnCancel.addEventListener("click", cancelLoginScreen);
+      btnLogin.addEventListener("click", doLogin);
       loginPassInput.addEventListener("keydown", function (e) {
         if (e.key === "Enter") doLogin();
       });
@@ -1914,24 +2021,27 @@
         if (e.key === "Enter") doLogin();
       });
 
-      /* ── Auto-login if session exists or remembered (Staggered Load) ── */
+      /* ── Load dashboard data BEFORE revealing page (Zero FOUC) ── */
       function openDashboardDirectly() {
         loginScreen.classList.add("hidden");
         dashboard.classList.remove("hidden");
 
-        setTimeout(function () {
-          loadDeviceTimezone();
-          updateClock();
-        }, 50);
-
-        setTimeout(function () {
-          loadSwitches();
-        }, 200);
+        loadDashboard()
+          .then(function () {
+            return loadDeviceTimezone();
+          })
+          .then(function () {
+            updateClock();
+            revealApp();
+          });
       }
 
-      /* ── Auto-login based on Validation settings (Disabled / Sessional / Every time) ── */
+      /* ── Auto-login & Server Token Sync Check ── */
       function initSession() {
-        fetch("/api/admin/validation", { cache: "no-store" })
+        fetch("/api/admin/validation", {
+          cache: "no-store",
+          headers: { "X-Session-Token": getSessionToken() },
+        })
           .then(function (r) {
             return r.ok ? r.json() : null;
           })
@@ -1943,13 +2053,11 @@
             var loginMode =
               val && val.loginMode === "everytime" ? "everytime" : "sessional";
 
-            // Hide logout button when User Login is OFF
             var logoutBtn = document.getElementById("logoutBtn");
             if (logoutBtn) {
               logoutBtn.style.display = loginEnabled ? "" : "none";
             }
 
-            // Show live failed/lockout status in login modal if any
             if (val && (val.locked || val.failedAttempts > 0)) {
               renderLoginAttemptStatus(val);
             }
@@ -1957,28 +2065,29 @@
             // 1. Login disabled -> go straight to dashboard
             if (!loginEnabled) {
               openDashboardDirectly();
-              document.body.classList.remove("app-init");
               return;
             }
 
-            // 2. "Every time" mode -> clear stored session on page refresh so login is required
+            // 2. "Every time" mode -> clear session so login is required on refresh
             if (loginMode === "everytime") {
-              sessionStorage.removeItem(SESSION_KEY);
-              sessionStorage.removeItem(TOKEN_KEY);
-              localStorage.removeItem(REMEMBER_KEY);
-              localStorage.removeItem(TOKEN_KEY);
-              document.body.classList.remove("app-init");
+              clearSessionStorage();
+              dashboard.classList.add("hidden");
+              loginScreen.classList.remove("hidden");
+              revealApp();
               return;
             }
 
-            // 3. "Sessional" mode -> present login behavior
-            if (isLoggedIn() || checkRemembered()) {
-              if (checkRemembered()) {
-                sessionStorage.setItem(SESSION_KEY, "true");
-              }
+            // 3. "Sessional" mode -> verify token is still valid on ESP32
+            if (isLoggedIn() && (!val || val.sessionValid !== false)) {
               openDashboardDirectly();
+              return;
             }
-            document.body.classList.remove("app-init");
+
+            // Stale/invalidated token (e.g. after Forget, Edit Admin, or User Remove)
+            clearSessionStorage();
+            dashboard.classList.add("hidden");
+            loginScreen.classList.remove("hidden");
+            revealApp();
           });
       }
 

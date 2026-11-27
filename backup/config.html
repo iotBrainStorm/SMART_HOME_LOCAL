@@ -13,12 +13,22 @@
         -webkit-tap-highlight-color: transparent;
       }
 
+      html {
+        background: #121212;
+      }
+
       body {
         font-family:
           -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         background: #121212;
         min-height: 100vh;
         color: #e0e0e0;
+        transition: opacity 0.12s ease;
+      }
+
+      body.app-init {
+        visibility: hidden;
+        opacity: 0;
       }
 
       /* ── Top Bar ── */
@@ -1429,7 +1439,7 @@
       }
     </style>
   </head>
-  <body>
+  <body class="app-init">
     <!-- ── Top Bar ── -->
     <div class="topbar">
       <button class="back-btn" id="backBtn" title="Back to Dashboard">
@@ -4592,11 +4602,7 @@
     <script>
       /* ── API Helper ── */
       function getStoredSessionToken() {
-        return (
-          sessionStorage.getItem("smartHomeToken") ||
-          localStorage.getItem("smartHomeToken") ||
-          ""
-        );
+        return sessionStorage.getItem("smartHomeToken") || "";
       }
 
       function apiPost(url, body) {
@@ -4609,6 +4615,11 @@
           },
           body: body,
         }).then(function (r) {
+          if (r.status === 401) {
+            sessionStorage.clear();
+            window.location.replace("index.html");
+            return { ok: false, error: "Session expired" };
+          }
           return r.json().catch(function () {
             if (!r.ok) throw new Error("HTTP " + r.status);
             return {};
@@ -7379,6 +7390,9 @@
               )
                 .then(function (d) {
                   if (d.ok) {
+                    if (d.token) {
+                      sessionStorage.setItem("smartHomeToken", d.token);
+                    }
                     alert("User '" + userId + "' removed successfully!");
                     loadUsers();
                   } else {
@@ -7416,6 +7430,9 @@
               )
                 .then(function (d) {
                   if (d.ok) {
+                    if (d.token) {
+                      sessionStorage.setItem("smartHomeToken", d.token);
+                    }
                     alert("Admin credentials updated successfully!");
                     sessionStorage.setItem("smartHomeUser", editAdminId);
                     document.getElementById("editAdminPassword").value = "";
@@ -9998,14 +10015,158 @@
           });
         }
 
-        /* ═══ LOAD INITIAL DATA FROM ESP32 (STAGGERED TO SAVE MEMORY) ═══ */
-        var loadDelay = 0;
-        var delayStep = 150; // 150ms gap between each request
+        /* ═══ VERIFY SESSION & LOAD CRITICAL DATA BEFORE REVEAL (ZERO FOUC) ═══ */
+        var configRevealed = false;
+        function revealConfigPage() {
+          if (configRevealed) return;
+          configRevealed = true;
+          document.body.classList.remove("app-init");
+        }
+        setTimeout(revealConfigPage, 1800); // Safety fallback
 
-        // 1. Switch Data
-        setTimeout(
-          function () {
-            apiGet("/api/switches")
+        function startStaggeredSecondaryLoads() {
+          var loadDelay = 0;
+          var delayStep = 150;
+
+          setTimeout(
+            function () {
+              loadWifiStatus();
+            },
+            (loadDelay += delayStep),
+          );
+          setTimeout(
+            function () {
+              loadSavedWifi();
+            },
+            (loadDelay += delayStep),
+          );
+          setTimeout(
+            function () {
+              loadUsers();
+            },
+            (loadDelay += delayStep),
+          );
+          setTimeout(
+            function () {
+              loadTimeSettings();
+            },
+            (loadDelay += delayStep),
+          );
+          setTimeout(
+            function () {
+              loadAdminLocationSettings();
+            },
+            (loadDelay += delayStep),
+          );
+          setTimeout(
+            function () {
+              loadTempHumSettings();
+            },
+            (loadDelay += delayStep),
+          );
+          setTimeout(
+            function () {
+              loadDeviceNameSettings();
+            },
+            (loadDelay += delayStep),
+          );
+          setTimeout(
+            function () {
+              loadMdnsSettings();
+            },
+            (loadDelay += delayStep),
+          );
+          setTimeout(
+            function () {
+              loadSchedulePrioritySettings();
+            },
+            (loadDelay += delayStep),
+          );
+          setTimeout(
+            function () {
+              loadRestartScheduleSettings();
+            },
+            (loadDelay += delayStep),
+          );
+          setTimeout(
+            function () {
+              loadSchedulesForSwitch();
+            },
+            (loadDelay += delayStep),
+          );
+          setTimeout(
+            function () {
+              loadFutureSchedulesForSwitch();
+            },
+            (loadDelay += delayStep),
+          );
+          setTimeout(
+            function () {
+              if (
+                document
+                  .getElementById("scheduleList")
+                  .classList.contains("active")
+              )
+                loadScheduleList();
+            },
+            (loadDelay += delayStep),
+          );
+          setTimeout(
+            function () {
+              if (
+                document
+                  .getElementById("futureScheduleList")
+                  .classList.contains("active")
+              )
+                loadFutureScheduleList();
+            },
+            (loadDelay += delayStep),
+          );
+          setTimeout(
+            function () {
+              if (
+                document
+                  .getElementById("sensorAutomationList")
+                  .classList.contains("active")
+              )
+                loadSensorAutomationList();
+            },
+            (loadDelay += delayStep),
+          );
+        }
+
+        // 1. Validate session against ESP32 first
+        fetch("/api/admin/validation", {
+          cache: "no-store",
+          headers: { "X-Session-Token": getStoredSessionToken() },
+        })
+          .then(function (r) {
+            return r.ok ? r.json() : null;
+          })
+          .catch(function () {
+            return null;
+          })
+          .then(function (val) {
+            if (val) {
+              validationState.loginEnabled = val.loginEnabled !== false;
+              validationState.loginMode =
+                val.loginMode === "everytime" ? "everytime" : "sessional";
+              validationState.verifyEnabled = val.verifyEnabled !== false;
+              validationState.maxAttempts = val.maxAttempts || 3;
+              validationState.lockoutMode =
+                val.lockoutMode === "restart_only"
+                  ? "restart_only"
+                  : "restart_or_1h";
+
+              if (validationState.loginEnabled && val.sessionValid === false) {
+                sessionStorage.clear();
+                window.location.replace("index.html");
+                return;
+              }
+            }
+
+            // 2. Load switch names/icons/relays immediately before revealing UI
+            return apiGet("/api/switches")
               .then(function (d) {
                 var nameInputs = document.querySelectorAll(
                   "#panel-sw-name .cfg-input",
@@ -10028,129 +10189,13 @@
                 }
                 refreshSwitchSettingsUi();
               })
-              .catch(function () {});
-          },
-          (loadDelay += delayStep),
-        );
-
-        // 2. WiFi Status
-        setTimeout(
-          function () {
-            loadWifiStatus();
-          },
-          (loadDelay += delayStep),
-        );
-        setTimeout(
-          function () {
-            loadSavedWifi();
-          },
-          (loadDelay += delayStep),
-        );
-
-        // 4. Load remaining panels sequentially
-        setTimeout(
-          function () {
-            loadUsers();
-          },
-          (loadDelay += delayStep),
-        );
-
-        setTimeout(
-          function () {
-            loadTimeSettings();
-            loadValidationSettings();
-          },
-          (loadDelay += delayStep),
-        );
-
-        setTimeout(
-          function () {
-            loadAdminLocationSettings();
-          },
-          (loadDelay += delayStep),
-        );
-        setTimeout(
-          function () {
-            loadTempHumSettings();
-          },
-          (loadDelay += delayStep),
-        );
-        setTimeout(
-          function () {
-            loadDeviceNameSettings();
-          },
-          (loadDelay += delayStep),
-        );
-        setTimeout(
-          function () {
-            loadMdnsSettings();
-          },
-          (loadDelay += delayStep),
-        );
-        setTimeout(
-          function () {
-            loadSchedulePrioritySettings();
-          },
-          (loadDelay += delayStep),
-        );
-        setTimeout(
-          function () {
-            loadRestartScheduleSettings();
-          },
-          (loadDelay += delayStep),
-        );
-        setTimeout(
-          function () {
-            loadSchedulesForSwitch();
-          },
-          (loadDelay += delayStep),
-        );
-        setTimeout(
-          function () {
-            loadFutureSchedulesForSwitch();
-          },
-          (loadDelay += delayStep),
-        );
-
-        // Deep Link List Loaders
-        setTimeout(
-          function () {
-            if (
-              document
-                .getElementById("scheduleList")
-                .classList.contains("active")
-            ) {
-              loadScheduleList();
-            }
-          },
-          (loadDelay += delayStep),
-        );
-
-        setTimeout(
-          function () {
-            if (
-              document
-                .getElementById("futureScheduleList")
-                .classList.contains("active")
-            ) {
-              loadFutureScheduleList();
-            }
-          },
-          (loadDelay += delayStep),
-        );
-
-        setTimeout(
-          function () {
-            if (
-              document
-                .getElementById("sensorAutomationList")
-                .classList.contains("active")
-            ) {
-              loadSensorAutomationList();
-            }
-          },
-          (loadDelay += delayStep),
-        );
+              .catch(function () {})
+              .then(function () {
+                loadValidationSettings();
+                revealConfigPage();
+                startStaggeredSecondaryLoads();
+              });
+          });
       })();
     </script>
   </body>
